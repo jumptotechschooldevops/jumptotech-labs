@@ -1141,6 +1141,8 @@ export const OPERATOR_ACTIONS = [
   // Roles (docs/runbooks/private-beta-operations.md §7.4).
   'role_show',
   'role_set',
+  // Ending an account's browser sign-ins (docs/runbooks/identity-and-access.md).
+  'sign_out',
 ] as const;
 /** How an operator request ended: served, refused (bad input, unknown session), or failed. */
 export const OPERATOR_OUTCOMES = ['ok', 'rejected', 'failed'] as const;
@@ -1361,15 +1363,48 @@ export function createRegistry(options: CreateRegistryOptions): Registry {
  * The collector is awaited by `prom-client`, so an async read of the database
  * or the container runtime is safe here. It must still be cheap: it runs on
  * every scrape, once per fifteen seconds.
+ *
+ * ## Bounded, because the scrape is the alarm
+ *
+ * An async read is awaited for as long as its dependency takes, and a
+ * dependency that *hangs* rather than refuses — a paused or wedged broker, a
+ * database that accepts the connection and never answers — took up to its own
+ * timeout: 120 s for the broker's availability ping, 15 s for a query. Against
+ * Prometheus's 10 s scrape timeout that made `up` read 0 for the service doing
+ * the *reporting*: a stalled sandboxd paged as `ServiceDown{job="api"}`, whose
+ * inhibition then silenced every api-labelled alert, and a stalled database
+ * made `jtt_db_up` vanish instead of reading 0, so `DatabaseDown` never fired.
+ *
+ * So each collector gets `timeoutMs` (default {@link SCRAPE_COLLECTOR_TIMEOUT_MS}).
+ * `prom-client` runs every collector of a scrape concurrently, so the scrape is
+ * bounded by the slowest one plus the 2 s readiness refresh — well inside 10 s.
+ * A collector that runs out of time leaves its gauge at the previous value for
+ * that scrape, as the readiness gauge does; the dependency's own signal
+ * (`jtt_db_up`, `jtt_sandboxd_runtime_up`, both probed on timers, off the
+ * scrape path) is what reports the hang. The read itself is not cancelled: it
+ * finishes in the background and the next scrape sees its answer.
  */
+export const SCRAPE_COLLECTOR_TIMEOUT_MS = 3_000;
+
 export function setCollector(
   metric: Gauge,
   collect: (metric: Gauge) => void | Promise<void>,
+  options: { timeoutMs?: number } = {},
 ): void {
+  const timeoutMs = options.timeoutMs ?? SCRAPE_COLLECTOR_TIMEOUT_MS;
   (metric as unknown as { collect: () => void | Promise<void> }).collect = function collector(
     this: Gauge,
   ) {
-    return collect(this);
+    const collected = collect(this);
+    if (!(collected instanceof Promise)) return collected;
+    // A read that fails after the scrape stopped waiting has nobody to tell.
+    collected.catch(() => undefined);
+    let timer: NodeJS.Timeout | undefined;
+    const timedOut = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, timeoutMs);
+      timer.unref?.();
+    });
+    return Promise.race([collected, timedOut]).finally(() => clearTimeout(timer));
   };
 }
 

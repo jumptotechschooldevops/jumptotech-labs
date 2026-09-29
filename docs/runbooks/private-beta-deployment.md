@@ -276,8 +276,17 @@ ops() { prod exec -T api node /app/node_modules/.bin/tsx apps/api/src/operator-c
    sudo curl -fsSLo /usr/local/bin/kubectl https://dl.k8s.io/release/v1.34.2/bin/linux/amd64/kubectl
    sudo chmod 0755 /usr/local/bin/kind /usr/local/bin/kubectl
    ```
+   Then, **before any container exists**, bound every container log the platform does not bound itself. Sandboxes get `--log-opt max-size=1m` from the orchestrator (#119), but the Docker track's privileged Docker-in-Docker container, and the kind node, inherit the daemon default, which is unbounded `json-file`. A Docker-track student can write into that log without limit. A container keeps the log settings it was created with, so this must come first:
+   ```bash
+   echo '{"log-driver":"json-file","log-opts":{"max-size":"10m","max-file":"3"}}' | sudo tee /etc/docker/daemon.json
+   sudo systemctl restart docker && docker info --format '{{.LoggingDriver}}'   # json-file
+   ```
 2. `sudo useradd -m jtt-ops && sudo usermod -aG docker jtt-ops`; log in again as `jtt-ops`.
-3. Firewall (§2.1) at the provider or in `DOCKER-USER`. **EXTERNAL.**
+3. Firewall (§2.1) at the provider or in `DOCKER-USER`. **EXTERNAL.** A provider firewall does not see traffic from a sandbox to the host itself ([production-host-readiness.md](../development/production-host-readiness.md), row L6), so also:
+   - make sshd key-only (`PasswordAuthentication no`) and bind it to the public address (`ListenAddress <public-ip>`), then `sudo sshd -t && sudo systemctl reload ssh`, keeping a second SSH session open while you do it;
+   - on a cloud VM, drop the metadata endpoint for containers: `sudo iptables -I DOCKER-USER -d 169.254.169.254 -j DROP`, persisted the way the host persists iptables rules.
+
+   Both are proven from a lab shell in §5.9.
 
 **B. Repository**
 
@@ -485,7 +494,42 @@ revoke` removes one.
 ### 5.9 One real flow per track
 
 LINUX-001, K8S-001, DOCKER-001: Start, terminal, Check, Reset, End; then
-`ops status` returns to `0 of 5 held`.
+`ops status` returns to `0 of 5 held`. If you teach the Docker track, add
+DOCKER-004: it is graded from the workspace the student's own per-session uid
+writes, a path the CI sweeps do not walk through the real terminal.
+
+While the DOCKER-001 lab is open, and before any student has access, prove
+three things the repository cannot:
+
+```bash
+# In the DOCKER-001 lab shell. Host listeners reachable from the terminal (§A step 3): must FAIL.
+nc -zv -w3 "$(ip route | awk '/default/ {print $3}')" 22
+# The same from a container the student runs, on the Docker-track bridge. <gw> is
+# the host's address on it: on the host, docker network inspect jumptotech-sandboxes
+# --format '{{(index .IPAM.Config 0).Gateway}}'. Must FAIL.
+docker run --rm alpine sh -c 'apk add -q netcat-openbsd && nc -zv -w3 <gw> 22'
+# Cloud VM only. The metadata service: must print nothing and exit non-zero.
+curl -m3 -s http://169.254.169.254/ ; echo "exit $?"
+# Terminal memory. /home/student (256m), /tmp (64m) and /run/jumptotech (8m) are
+# tmpfs inside the terminal's 512m limit, and tmpfs pages count against it.
+df -h "$HOME"          # must be the 256M /home/student tmpfs; if not, cd into a directory that is
+dd if=/dev/zero of="$HOME/fill" bs=1M count=200; ls -l "$HOME/fill"
+```
+
+```bash
+# On the host, while the fill file exists; keep the LINUX-001 shell open in another tab.
+docker stats --no-stream $(prod ps -q terminal)
+```
+
+Then `rm "$HOME/fill"` in the lab shell. Each of these is a stop condition:
+
+- the `nc` connects;
+- the metadata service answers;
+- the terminal's MEM USAGE passes about 80 % of 512 MiB;
+- the terminal restarts, or the LINUX-001 shell disconnects.
+
+For the memory case, raise the terminal's `mem_limit` in a production
+override (for example `1g`), redeploy and repeat.
 
 ---
 
@@ -631,7 +675,7 @@ has run.
 - the §7.2 B restore is impossible or unacceptable (no usable `pre-migration`
   archive, or losing the data written since would be worse);
 - someone has read every migration the older code does not ship and judged the
-  older code safe on it (every migration to date, 001–007, is additive: new tables, columns, indexes, one backfill, a widened `CHECK`, a sequence-defaulted column, and no drop. Rolling back across 007 this way also returns every terminal shell to one shared uid: the pre-007 terminal has no per-session uid (SEC-ARCH-2), so this route gives up that isolation until the release matches again);
+  older code safe on it. 001–009 are additive: new tables, columns, indexes, one backfill, a widened `CHECK`, sequence-defaulted and defaulted columns, and no drop. Rolling back across 007 this way also returns every terminal shell to one shared uid: the pre-007 terminal has no per-session uid (SEC-ARCH-2), so this route gives up that isolation until the release matches again. **010 is not safe for older code:** it re-creates the `access_entitlements` primary key as `(user_id, scope, granted_via)`, and every access change before 010 (grant, trial, suspend, restore, revoke) is written with `ON CONFLICT (user_id, scope)`, which no longer matches a constraint, so each one fails; and it reads one of an account's rows with no order where 010 allows two, so a suspended student with a subscription can get lab access (measured: [disaster-recovery.md §4.2](disaster-recovery.md)). Across 010, restore the `pre-migration` archive (§7.2 B);
 - it is recorded as an incident decision, with who decided and why.
 
 Then remove it the moment code and schema match again. **Never** use it when:
@@ -708,7 +752,9 @@ Tick every line on the day, in order, with the evidence in `/srv/jumptotech/evid
 
 **On the host**
 - [ ] `make production-config-check`: 0 FAIL.
-- [ ] `make production-preflight …`: `RESULT: PASS`.
+- [ ] `make production-preflight …`: `RESULT: PASS`, **and every `MANUAL CHECK REQUIRED` line resolved by hand**. A missing alert or heartbeat destination is reported as MANUAL, not FAIL, so `RESULT: PASS` alone does not prove anyone will be told.
+- [ ] `/etc/docker/daemon.json` bounds container logs (§4 step 1), written before the first container: `docker info --format '{{.LoggingDriver}}'` is `json-file` and `docker inspect --format '{{.HostConfig.LogConfig}}' <a dind container>` shows `max-size`.
+- [ ] sshd is key-only and bound to the public address; the §5.9 `nc` from a lab shell fails; on a cloud VM, the metadata address is dropped for containers.
 - [ ] Attestation `VERDICT: PASS` for this `.env`, written **after** any synthetic run.
 - [ ] `make beta-validate` (§5.3): `RESULT: PASS`, and the validation stack removed.
 - [ ] `capacity:classroom --students 5 --extra-students 1` (§5.4): PASS, PSI during the burst well under ~20 %, no OOM kill in `host.csv`.
@@ -717,7 +763,8 @@ Tick every line on the day, in order, with the evidence in `/srv/jumptotech/evid
 - [ ] First backup, `--verify-only`, `--into` check database validated and dropped; cron installed.
 - [ ] Recovery drills D-1…D-7: smoke unchanged after each; kind node Ready after the reboot.
 - [ ] Rehearsal R0–R14 complete; `alerts` shows nothing firing.
-- [ ] One LINUX-001, K8S-001 and DOCKER-001 flow: Start, terminal, Check, Reset, End; cleanup empty (§5 cleanup row).
+- [ ] One LINUX-001, K8S-001, DOCKER-001 and DOCKER-004 flow: Start, terminal, Check, Reset, End; cleanup empty (§5 cleanup row).
+- [ ] The §5.9 terminal memory check: the terminal stayed under ~80 % of its limit with a 200 MB file in a student's home, and the other shell stayed connected.
 - [ ] The five students have signed in once and been granted access (§5.8); `ops access show` ACTIVE for each.
 - [ ] `LAB_LAUNCHES_PAUSED=false`; `MAX_ACTIVE_SESSIONS=5`; `MAX_ACTIVE_SESSIONS_PER_STUDENT=1`; `DATABASE_ALLOW_NEWER_SCHEMA` unset.
 - [ ] Evidence template filled ([production-host-evidence-template.md](../releases/production-host-evidence-template.md)).
@@ -736,6 +783,8 @@ Tick every line on the day, in order, with the evidence in `/srv/jumptotech/evid
 10. A recovery drill left the platform degraded (a service not healthy, the kind node not Ready, row counts changed).
 11. Any critical alert is firing (`alerts`), or `ops status` shows a slot held with no student active.
 12. The deployed commit is not the one the evidence was gathered on (`release.commit` not PASS).
+13. A lab shell reaches a host listener (sshd) or, on a cloud VM, the metadata service (§5.9).
+14. The terminal restarted, dropped another shell, or passed ~80 % of its memory limit in the §5.9 fill check or the rehearsal.
 
 ## 11. Remaining manual actions for the owner
 

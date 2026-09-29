@@ -53,7 +53,7 @@ import {
 } from '@jumptotech/observability';
 import type { ApiConfig } from '../config.js';
 import { asyncRoute, sendError, sendOk } from '../http.js';
-import { progressErrorResponse } from '../identity.js';
+import { progressErrorResponse, resolveStudent } from '../identity.js';
 import { record } from '../progress.js';
 import { resolveTerminalWsBaseForClient } from '../public-origin.js';
 import { toAttemptPayload } from './me.js';
@@ -342,6 +342,9 @@ export function issueTerminalGrant(
   const { token } = issueSessionToken({
     sessionId: session.sessionId,
     ownerUserId,
+    // Bound to the browser sign-in asking for it, so signing out ends it
+    // (docs/authentication.md §3.6). Unset for a bearer caller.
+    ...(req.authSessionId ? { authSessionId: req.authSessionId } : {}),
     labId: session.labId,
     namespace: session.namespace,
     secret: config.terminalSessionSecret,
@@ -371,7 +374,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
    */
   function recordReset(
     outcome: (typeof LAB_RESET_OUTCOMES)[number],
-    fields: { provider?: string; labId?: string; sessionId?: string; code?: string },
+    fields: { provider?: string; labId?: string; sessionId?: string; code?: string; durationMs?: number; err?: unknown },
   ): void {
     if (fields.provider) deps.metrics?.sessions.labResets.inc({ provider: fields.provider, outcome });
     deps.metrics?.sessions.labResetOutcomes.inc({ outcome });
@@ -383,7 +386,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
 
   function recordEnd(
     outcome: (typeof LAB_END_OUTCOMES)[number],
-    fields: { provider?: string; labId?: string; sessionId?: string; code?: string },
+    fields: { provider?: string; labId?: string; sessionId?: string; code?: string; durationMs?: number; err?: unknown },
   ): void {
     deps.metrics?.sessions.labEndOutcomes.inc({ outcome });
     obs[outcome === 'success' ? 'info' : 'warn'](
@@ -511,6 +514,10 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
       count: entries.length,
       limits: {
         maxActiveSessionsPerStudent: deps.config.lifetimes.maxActiveSessionsPerStudent ?? null,
+        // The deadlines every lab runs under, so a lab page can say so before
+        // Start rather than call a 60-minute estimate "not a deadline".
+        maxSessionMinutes: Math.floor(deps.config.lifetimes.maxSessionSeconds / 60),
+        idleTimeoutMinutes: Math.floor(deps.config.lifetimes.idleTimeoutSeconds / 60),
       },
     });
   }));
@@ -618,7 +625,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
     checksInFlight.add(session.sessionId);
     const checkStartedAt = Date.now();
     try {
-      await runCheck(res, session, allowed.user.userId);
+      await runCheck(req, res, session, allowed.user.userId);
     } catch (error) {
       // Nothing graded: the platform broke under the check. The central
       // handler answers 500; the classroom sees a Check that errored.
@@ -634,7 +641,7 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
     }
   }));
 
-  async function runCheck(res: Response, session: LabSession, actorUserId: string): Promise<void> {
+  async function runCheck(req: Request, res: Response, session: LabSession, actorUserId: string): Promise<void> {
     const lab = registry.get(session.labId);
     // Checking is activity from the moment it starts: stamped only when it
     // finished, a check that ran across the idle deadline could be expired by
@@ -769,9 +776,33 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
      * the session, and a repeated PASS updates nothing — the store decides that,
      * not this route.
      */
-    const outcome = await record(log, 'record check', () =>
+    let outcome = await record(log, 'record check', () =>
       progress.recordCheck(session.sessionId, result.passed),
     );
+
+    /*
+     * No attempt is bound to this session. Start records one best-effort, so a
+     * progress store that blipped during Start (or failed only the bind) left
+     * the lab running with nothing to record against — and without this, every
+     * later Check answers "could not be saved" for the rest of the lab, however
+     * often the student presses Verify, and a pass is lost for good. Open and
+     * bind the attempt now. Only the owner can check (`session:check`), so the
+     * student is resolved exactly as Start resolved it.
+     */
+    if (outcome === null) {
+      outcome = await record(log, 'open missing attempt', async () => {
+        const student = resolveStudent(deps.identity, req);
+        const opened = await progress.startAttempt({
+          studentId: student.studentId,
+          labId: lab.id,
+          track: lab.track,
+          identitySource: student.source,
+        });
+        await progress.bindSession(opened.attemptId, session.sessionId);
+        log(`opened missing attempt ${opened.attemptId} for session ${session.sessionId} at check`);
+        return progress.recordCheck(session.sessionId, result.passed);
+      });
+    }
 
     // A failing lab is a successful *check*: HTTP 200 with passed:false.
     sendOk(res, {
@@ -900,8 +931,16 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
       // SESSION_RESET_FAILED is a reset that ran and did not finish; every other
       // session-domain error refused it before any runtime work.
       const code = error instanceof SessionError ? error.code : undefined;
+      // Which session, and why, on the operator's line too — not only on the
+      // classroom event. Without them a thrown SESSION_RESET_FAILED logged a
+      // bare code that no Support ID could find. `provider` stays off: here it
+      // would also start counting refusals in the per-provider reset series.
       recordReset(code === undefined || code === 'SESSION_RESET_FAILED' ? 'failed' : 'rejected', {
+        labId: allowed.session.labId,
+        sessionId: allowed.session.sessionId,
         ...(code ? { code } : {}),
+        durationMs: Date.now() - resetStartedAt,
+        err: error,
       });
       await event(allowed.session, allowed.user.userId, {
         operation: 'reset',
@@ -942,7 +981,11 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
       });
       if (!destroy.namespaceGone) {
         sendError(res, 503, {
-          code: destroy.error?.code ?? 'DESTROY_FAILED',
+          // Always DESTROY_FAILED to the student. The provider's own code
+          // (ENVIRONMENT_UNREACHABLE, PROVIDER_UNAVAILABLE) is in the event and
+          // the metric above; sent here, the web reads it as a Verify failure
+          // or a track outage and tells a student who pressed End to act.
+          code: 'DESTROY_FAILED',
           message: STUDENT_MESSAGE_BY_CODE.DESTROY_FAILED!,
           // No time is promised: the reaper finishes an unfinished End after a
           // grace period and then retries every sweep until the provider
@@ -968,7 +1011,14 @@ export function createSessionRoutes(deps: SessionRoutesDeps): Router {
       });
     } catch (error) {
       const code = error instanceof SessionError ? error.code : undefined;
-      recordEnd(code === undefined ? 'failed' : 'rejected', { ...(code ? { code } : {}) });
+      recordEnd(code === undefined ? 'failed' : 'rejected', {
+        provider: allowed.session.provider,
+        labId: allowed.session.labId,
+        sessionId: allowed.session.sessionId,
+        ...(code ? { code } : {}),
+        durationMs: Date.now() - endStartedAt,
+        err: error,
+      });
       await event(allowed.session, allowed.user.userId, {
         operation: 'end',
         outcome: code === undefined ? 'failed' : 'refused',

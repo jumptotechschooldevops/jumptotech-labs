@@ -78,6 +78,7 @@ export {
 export {
   createRegistry,
   setCollector,
+  SCRAPE_COLLECTOR_TIMEOUT_MS,
   LAB_START_OUTCOMES,
   LAB_RESET_OUTCOMES,
   LAB_END_OUTCOMES,

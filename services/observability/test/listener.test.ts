@@ -15,6 +15,7 @@ import {
   createObservabilityListener,
   createRegistry,
   ObservabilityConfigError,
+  setCollector,
   silentLogger,
   simpleCheck,
 } from '../src/index.js';
@@ -237,6 +238,59 @@ describe('/readyz reflects dependencies', () => {
     expect((await fetch(`${url}/readyz`)).status).toBe(503);
     healthy = true;
     expect(await scrape()).toContain('jtt_readyz_ok{service="test"} 1');
+  });
+
+  /*
+   * The same property for a scrape-time collector. The api's provider gauge
+   * awaited a broker ping with a 120 s timeout and its session gauges a
+   * database query: a paused sandboxd or a wedged PostgreSQL held the scrape
+   * past Prometheus's 10 s, and `up{job="api"}` read 0 for a service that was
+   * fine. The hung gauge keeps its previous value; every other series is served.
+   */
+  it('serves the scrape, and the last value, when a collector hangs', async () => {
+    const TOKEN = 'test-scrape-token-0123456789abcdef';
+    const registry = createRegistry({ service: 'test', defaultMetrics: false });
+    const common = createCommonMetrics(registry, 'test');
+    const { Gauge } = await import('prom-client');
+    const wedged = new Gauge({ name: 'jtt_test_wedged', help: 'a collector whose dependency hangs', registers: [registry] });
+    const healthy = new Gauge({ name: 'jtt_test_healthy', help: 'a collector that answers', registers: [registry] });
+    let hang = false;
+    setCollector(wedged, async (gauge) => {
+      if (hang) await new Promise(() => undefined);
+      gauge.set(7);
+    }, { timeoutMs: 200 });
+    let reads = 0;
+    setCollector(healthy, async (gauge) => {
+      gauge.set(++reads);
+    });
+    const server = createObservabilityListener({
+      service: 'test',
+      port: 0,
+      host: '127.0.0.1',
+      registry,
+      scrapeToken: TOKEN,
+      checks: [],
+      logger: silentLogger(),
+      readyzGauge: common.readyzOk,
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => (server.listening ? resolve() : server.once('listening', () => resolve())));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const scrape = async () => (await fetch(`${url}/metrics`, { headers: { authorization: `Bearer ${TOKEN}` } })).text();
+
+    expect(await scrape()).toContain('jtt_test_wedged 7');
+    hang = true;
+    const started = Date.now();
+    const body = await scrape();
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(body).toContain('jtt_test_wedged 7');
+    expect(body).toContain('jtt_test_healthy 2');
+  });
+
+  it('bounds collectors by default, well inside a 10 s scrape timeout', async () => {
+    const { SCRAPE_COLLECTOR_TIMEOUT_MS } = await import('../src/index.js');
+    // Readiness refresh (2 s) + the slowest collector, run concurrently.
+    expect(2_000 + SCRAPE_COLLECTOR_TIMEOUT_MS).toBeLessThanOrEqual(5_000);
   });
 
   it('serves the scrape even when a readiness check hangs', async () => {

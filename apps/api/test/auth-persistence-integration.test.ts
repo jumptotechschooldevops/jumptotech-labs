@@ -319,6 +319,28 @@ if (!enabled) {
       expect(await store.resolve(created.cookieValue)).toBeNull();
     });
 
+    it('finds a live session by its stored id, in SQL, and not once it is ended or expired', async () => {
+      const store = new PostgresAuthSessionStore(db);
+      const userId = await aUser();
+      const live = await store.create(userId, 3600);
+      const id = live.record.authSessionId;
+
+      expect((await store.findLive(id))?.userId).toBe(userId);
+      // The cookie value is not a stored id: presenting it finds nothing.
+      expect(await store.findLive(live.cookieValue)).toBeNull();
+
+      await store.destroy(live.cookieValue);
+      expect(await store.findLive(id)).toBeNull();
+
+      const aged = await store.create(userId, 3600);
+      await db.query(
+        `UPDATE auth_sessions SET created_at = now() - interval '2 hours', expires_at = now() - interval '1 second'
+          WHERE auth_session_id = $1`,
+        [aged.record.authSessionId],
+      );
+      expect(await store.findLive(aged.record.authSessionId)).toBeNull();
+    });
+
     it('destroys a session, idempotently', async () => {
       const store = new PostgresAuthSessionStore(db);
       const created = await store.create(await aUser(), 3600);

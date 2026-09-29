@@ -458,6 +458,24 @@ Each change is logged as `ops.operator.role_changed` (the account, before and
 after, and in the message who and why) and counted
 (`jtt_operator_actions_total{action="role_set"}`). Never change roles with SQL.
 
+### 7.5 Signing a student out everywhere
+
+A stolen or forgotten sign-in (a lost laptop, a shared machine left signed in,
+a student removed from the course) is ended by deleting its server-side
+record; the cookie is only an index into it.
+
+```bash
+ops sign-out <user-id> --by <you> --reason "laptop reported stolen"
+```
+
+Every browser signed in as that account is refused from its next request and
+sees the sign-in page. Nothing else changes: the account may sign in again
+(stop that with `ops access suspend`), and a lab already running keeps running
+(`--end-sessions --yes` on suspend or revoke ends it). Logged as
+`ops.operator.signed_out` (the account and how many sign-ins ended; who and why
+in the message) and counted (`jtt_operator_actions_total{action="sign_out"}`).
+Never delete `auth_sessions` rows with SQL.
+
 ## 8. DECISION REQUIRED
 
 | Decision | Until it is made |

@@ -156,6 +156,9 @@ describe('the catalog', () => {
     fireEvent.click(screen.getAllByRole('button', { name: 'Clear filters' })[0]!);
     expect(cardIds()).toHaveLength(3);
     expect(window.location.hash).toBe('#/labs');
+    // The button that had focus is gone; focus goes back to the search box,
+    // not to the top of the page.
+    expect(document.activeElement).toBe(screen.getByRole('searchbox', { name: 'Search' }));
   });
 
   it('links every card to its lab page, and a running lab straight back into it', async () => {

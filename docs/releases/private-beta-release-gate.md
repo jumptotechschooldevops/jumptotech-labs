@@ -24,6 +24,11 @@ in §7 must be made before students reach a hosted deployment.
 > is not a record. §11 is a separate, dated re-validation against the current
 > tree, and it says which of these gates have been re-run there and which have
 > not. Read §11 before treating §10's verdict as current.
+>
+> **The current status of every release condition** — for this beta, for paid
+> students and for a public release — is kept in
+> [release-checklist.md](release-checklist.md), row by row, with its evidence.
+> That page supersedes §10 as the current verdict; this file stays the record.
 
 ---
 

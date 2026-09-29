@@ -13,6 +13,7 @@ Every production command below is the command that host is meant to run.
 |---|---|
 | Bringing up a new host, upgrade, rollback | [production-host-readiness.md](../development/production-host-readiness.md) (§14 preflight, §15 deployment, §16 smoke, §21 upgrade and rollback) |
 | Running the beta day to day; the `prod`, `q`, `ready`, `alerts`, `ops` helpers | [private-beta-operations.md](private-beta-operations.md) |
+| Student accounts: add, remove, sign out, a stolen session, emergency revoke | [identity-and-access.md](identity-and-access.md) |
 | Something is wrong | [private-beta-incident-response.md](private-beta-incident-response.md) (incidents A–U) |
 | One alert | [README.md](README.md) → RB-01…RB-21 |
 | Backups, restore, disaster recovery | [postgres-backup-restore.md](postgres-backup-restore.md) |
@@ -70,6 +71,7 @@ Every production command below is the command that host is meant to run.
 | Take the site down | `prod stop web` (stays stopped across reboots) | ops §3, §6.1 |
 | Stop the stack | `prod down` — keeps the database; back up first | ops §6 |
 | End one student's lab | `ops end <id> --yes` | ops §7.1 |
+| Sign a student out everywhere | `ops sign-out <user-id> --by <you> --reason <why>` | ops §7.5; identity-and-access §8 |
 | Evidence after an incident | `make private-beta-diagnostics` (sanitized bundle) | ops §7.3; incident response §4 |
 | Upgrade | readiness §21.1, eight steps | readiness §21.1 |
 | Roll back | readiness §21.2 | readiness §21.2 |

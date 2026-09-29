@@ -104,13 +104,48 @@ Follow production-host-readiness.md §21. What decides the route back:
 - `prod up --wait` exiting non-zero **is** the health failure. The smoke's
   `release.commit` then confirms which commit each service reports.
 
-Every migration to date (001–007) is additive — new tables, columns and indexes,
-a backfill of one new column, a widened `CHECK`, and a sequence-defaulted
-`shell_uid` column (007). None drops or rewrites data, so the data-loss risk of
-a rollback is only what was written after the backup. Running pre-007 code on a
-007 schema with `DATABASE_ALLOW_NEWER_SCHEMA=true` works (the column fills
-itself), but that terminal runs every student's shell as one shared uid: the
-per-session isolation of SEC-ARCH-2 is gone until the release matches again.
+Migrations 001–009 are additive — new tables, columns and indexes, a backfill
+of one new column, a widened `CHECK`, a sequence-defaulted `shell_uid` column
+(007) and defaulted `kind`/`plan_id` columns (009). None drops or rewrites data,
+so the data-loss risk of a rollback is only what was written after the backup.
+Running pre-007 code on a 007 schema with `DATABASE_ALLOW_NEWER_SCHEMA=true`
+works (the column fills itself), but that terminal runs every student's shell as
+one shared uid: the per-session isolation of SEC-ARCH-2 is gone until the
+release matches again.
+
+**010 is the first migration older code cannot run on.** It re-creates the
+`access_entitlements` primary key as `(user_id, scope, granted_via)`. Every
+access change before 010 — grant, trial, suspend, restore, revoke — is one
+upsert with `ON CONFLICT (user_id, scope)`, which no longer matches a
+constraint, so with `DATABASE_ALLOW_NEWER_SCHEMA=true` the previous api starts
+but every `ops access` change fails. It also reads one entitlement row per
+account with no order, where 010 lets an account hold two (an operator's and a
+subscription's): a student an operator SUSPENDED who also pays got lab access
+whenever PostgreSQL chose an index scan (measured). Rolling back across 010
+means restoring the `pre-migration` archive.
+
+**Measured rollback matrix** (2026-09-28, PostgreSQL 16,
+[report](../releases/dr-certification-2026-09-28.md) §5). Each earlier release
+was run against a database one migration ahead of it, and against one at 010,
+holding data the newer release wrote: first as it would start in production,
+then with `DATABASE_ALLOW_NEWER_SCHEMA=true` under its own persistence suites.
+
+| Rolling back across | Class | What the earlier release did |
+|---|---|---|
+| a code-only release (no migration) | ROLLBACK SAFE | the schema is unchanged; §21.2 "no new migration" |
+| 006 access entitlements | NOT A ROLLBACK TARGET | pre-006 code **starts without a word** (it predates the refusal) and has no entitlement model: every signed-in account may use labs, suspended and revoked ones included |
+| 007 shell uids | APPLICATION ROLLBACK REQUIRES OVERRIDE | refused; with the override its progress, session and access suites pass. Every terminal shell returns to one shared uid |
+| 008 session events | APPLICATION ROLLBACK REQUIRES OVERRIDE | refused; with the override its suites pass. The classroom view records nothing until the release matches |
+| 009 kinds and plans | APPLICATION ROLLBACK REQUIRES OVERRIDE | refused; with the override its suites pass. It does not read `plan_id`, so a trial limited to some tracks may use every track |
+| 010 billing | **DATABASE RESTORE REQUIRED** | refused; with the override every access change fails and suspensions can lose to subscriptions (above) |
+
+So **rolling back from any release that ships 010 to one that does not is a
+database restore**, never an override. The refusal itself exists only in
+releases from 97c6297 (#80, 2026-09-27), and with `DATABASE_AUTO_MIGRATE=false`
+from 1a38c29 (#126): anything older starts on any schema. Releases that carry
+#178 also read the class each migration recorded in the ledger
+(`-- rollback: restore-required`) and refuse such a version even under the
+override.
 
 ### 4.3 Database lost or corrupt; host intact
 
@@ -123,7 +158,9 @@ per-session isolation of SEC-ARCH-2 is gone until the release matches again.
    ([RB-02 §4d](RB-02-database.md)). The nightly `db-backup.sh` now **refuses** to
    back that database up, so retention cannot age the good archives out.
 5. Select, verify and inspect the newest archive; `--replace` (postgres-backup-restore.md §6, §7.1).
-6. `prod up -d --wait`; validate (§6 below).
+6. `prod restart terminal` (its shells may hold uids the restored database would
+   hand out again: postgres-backup-restore.md §8), then `prod up -d --wait`;
+   validate (§6 below).
 
 **Split brain.** Anything students wrote between the re-creation and the restore
 lives only in the `jumptotech_labs_prerestore_<ts>` database `--replace` keeps.
@@ -236,8 +273,17 @@ The **targets** are an **OPERATOR DECISION REQUIRED**. postgres-backup-restore.m
 | backup frequency (one cron line a day today) | whether a replacement host exists or must be provisioned (D2) |
 | whether the newest archive left the host before it was lost (D7) | fetching the archive from off-host storage (D7) |
 | whether backup failures reach a person (D6) — a silently failing job turns a 24 h RPO into weeks | image builds (`prod up --build`), `cluster:up`, sandbox images |
-| a `pre-migration` / `pre-restore` archive before planned changes | restore time: 2 s for 27 KB in the drill; production size unmeasured |
+| a `pre-migration` / `pre-restore` archive before planned changes | restore time: 2 s for 27 KB in the drill; a 500-student cohort (44 MB, 7 MB archive) took 31 s to back up and 145 s to restore, and 5,000 students (360 MB, 56 MB archive) 111 s and 187 s, on a loaded laptop; on a host, unmeasured |
 | no WAL archiving or point-in-time recovery (not built) | the validation steps (§5 13–18) and a person available with Docker access and the secrets |
+
+**Data-loss windows** with the one daily backup: a host lost just after a
+backup that reached off-host storage loses only sessions in progress; an hour
+after, an hour of attempts, completions, accounts, sign-ins, access changes and
+billing state; just before the next, up to 24 hours. A backup that failed or
+never left the host makes the loss unbounded. What a restore also undoes —
+suspensions, sign-outs, subscriptions — is in
+[postgres-backup-restore.md §8](postgres-backup-restore.md). Measured and
+unmeasured objectives: [dr-certification-2026-09-28.md §8–9](../releases/dr-certification-2026-09-28.md).
 
 ## 7. Recovery evidence
 

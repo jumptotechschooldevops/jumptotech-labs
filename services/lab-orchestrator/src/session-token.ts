@@ -38,6 +38,18 @@ export interface TerminalSessionClaims {
    * ownership check".
    */
   uid: string;
+  /**
+   * The browser sign-in this token was requested under, when it was one — its
+   * stored id (`auth_sessions.auth_session_id`, the SHA-256 of the cookie; never
+   * the cookie itself).
+   *
+   * Signing out deletes that record, and the API refuses a token whose sign-in
+   * is gone, so a token no longer outlives the sign-out of the browser that
+   * held it (docs/authentication.md §3.6). Absent on a token requested with a
+   * bearer credential, which has no sign-in to end; the API then relies on the
+   * owner and lab-access checks alone, as before.
+   */
+  asid?: string;
   /** Lab this session may operate on. */
   labId: string;
   /** Namespace the terminal starts in. */
@@ -47,6 +59,9 @@ export interface TerminalSessionClaims {
   /** Expiry, epoch seconds. */
   exp: number;
 }
+
+/** A stored browser sign-in id: the hex SHA-256 of the cookie value (apps/api/src/auth/browser-session.ts). */
+export const AUTH_SESSION_ID_SHAPE = /^[0-9a-f]{64}$/;
 
 export class InvalidSessionTokenError extends Error {
   readonly code = 'INVALID_SESSION_TOKEN';
@@ -69,6 +84,8 @@ export interface IssueOptions {
   sessionId: string;
   /** The session's owner. Required — see `uid` above. */
   ownerUserId: string;
+  /** The browser sign-in requesting it, when there is one — see `asid` above. */
+  authSessionId?: string;
   labId: string;
   namespace: string;
   secret: string;
@@ -92,9 +109,13 @@ export function issueSessionToken(options: IssueOptions): {
     // closes, so it is refused at the source rather than checked downstream.
     throw new Error('issueSessionToken requires the owning user id to bind the token to');
   }
+  if (options.authSessionId !== undefined && !AUTH_SESSION_ID_SHAPE.test(options.authSessionId)) {
+    throw new Error('issueSessionToken was given a sign-in id that is not a stored auth session id');
+  }
   const claims: TerminalSessionClaims = {
     sid: options.sessionId,
     uid: options.ownerUserId,
+    ...(options.authSessionId !== undefined ? { asid: options.authSessionId } : {}),
     labId: options.labId,
     namespace: options.namespace,
     iat: nowSeconds,
@@ -146,6 +167,11 @@ export function verifySessionToken(
   // means the API cannot re-prove ownership, and "cannot prove" is refused.
   if (typeof claims.uid !== 'string' || claims.uid.length === 0) {
     throw new InvalidSessionTokenError('token carries no session owner');
+  }
+
+  // Present means bound: a malformed binding is refused, never read as "unbound".
+  if (claims.asid !== undefined && (typeof claims.asid !== 'string' || !AUTH_SESSION_ID_SHAPE.test(claims.asid))) {
+    throw new InvalidSessionTokenError('malformed sign-in binding');
   }
 
   if (Math.floor(now() / 1000) >= claims.exp) {

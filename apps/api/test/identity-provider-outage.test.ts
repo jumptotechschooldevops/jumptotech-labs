@@ -117,7 +117,7 @@ async function api(idp: FakeIdentityProvider, authSessions = new InMemoryAuthSes
     const metric = (await registry.getMetricsAsJSON()).find((m) => m.name === name);
     return (metric?.values ?? []).find((v) => v.labels.outcome === outcome)?.value ?? 0;
   };
-  return { app, authSessions, count, lines };
+  return { app, authSessions, count, lines, users };
 }
 
 function cookies(res: request.Response): string {
@@ -186,6 +186,42 @@ describe('the identity provider is down', () => {
     expect(callback.body.error.code).toBe('AUTH_PROVIDER_UNAVAILABLE');
     expect(await count('jtt_auth_callback_total', 'provider_unavailable')).toBe(1);
     expect(await count('jtt_auth_callback_total', 'verification_failed')).toBe(0);
+  });
+});
+
+describe('a callback that fails says why', () => {
+  /*
+   * Measured in the 2026-09-28 observability drill: four students got a 401
+   * from /auth/callback and the only line was the access log. Every failure
+   * but the provider being down was a silent `verification_failed`, so a user
+   * store that could not be written looked exactly like a bad ID token.
+   */
+  it('names the user store when it, not the identity provider, failed the sign-in', async () => {
+    const idp = await provider();
+    const { app, count, lines, users } = await api(idp);
+    users.upsert = async () => {
+      throw Object.assign(new Error('Connection terminated due to connection timeout'), { name: 'Error' });
+    };
+    idp.signInAs({ subject: 'student-d', email: 'd@example.test' });
+    const callback = await finishLogin(app, await beginLogin(app));
+    expect(callback.status).toBeGreaterThanOrEqual(400);
+    expect(await count('jtt_auth_callback_total', 'verification_failed')).toBe(1);
+
+    const failed = lines.map((l) => JSON.parse(l) as Record<string, unknown>).filter((l) => l.event === 'auth.callback.failed');
+    expect(failed).toHaveLength(1);
+    expect(failed[0]!.msg).toMatch(/not an identity-provider error/);
+    expect(failed[0]!.msg).toMatch(/Connection terminated due to connection timeout/);
+  });
+
+  it('names the provider being down under the callback event, not the login one', async () => {
+    const idp = await provider();
+    const { app, lines } = await api(idp);
+    idp.signInAs({ subject: 'student-e', email: 'e@example.test' });
+    const flow = await beginLogin(app);
+    await idp.close();
+    await finishLogin(app, flow);
+    const failed = lines.map((l) => JSON.parse(l) as Record<string, unknown>).filter((l) => l.event === 'auth.callback.failed');
+    expect(failed.map((l) => l.msg)).toEqual([expect.stringContaining('AUTH_PROVIDER_UNAVAILABLE')]);
   });
 });
 

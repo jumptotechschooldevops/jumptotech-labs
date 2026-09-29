@@ -77,6 +77,16 @@ export interface AuthRoutesDeps {
   mode: 'oidc' | 'development';
   logger?: (message: string) => void;
   /**
+   * Why a callback did not sign anyone in — `auth.callback.failed`.
+   *
+   * The outcome counter says *that* callbacks fail; this says which step and
+   * why. Without it, a token endpoint timing out, an ID token that did not
+   * verify and the user store (PostgreSQL) refusing the write were all one
+   * silent `verification_failed`, and `OidcSignInFailures` could not be told
+   * from a database outage. Defaults to `logger`.
+   */
+  callbackLogger?: (message: string) => void;
+  /**
    * Counts each callback's outcome — BETA-P0-018. A closed code from
    * `AUTH_CALLBACK_OUTCOMES`, never the provider's error text.
    */
@@ -180,6 +190,7 @@ function isBrowserNavigation(req: Request): boolean {
 export function createAuthRoutes(deps: AuthRoutesDeps): Router {
   const router = Router();
   const log = deps.logger ?? (() => undefined);
+  const logCallbackFailure = deps.callbackLogger ?? log;
   const txCookieName = `${deps.cookie.name}${TRANSACTION_COOKIE_SUFFIX}`;
 
   /**
@@ -358,7 +369,7 @@ export function createAuthRoutes(deps: AuthRoutesDeps): Router {
      * page the user is about to trust.
      */
     if (typeof req.query.error === 'string') {
-      log(`sign-in refused by the identity provider: ${String(req.query.error).slice(0, 200)}`);
+      logCallbackFailure(`sign-in refused by the identity provider: ${String(req.query.error).slice(0, 200)}`);
       outcome('provider_refused');
       res.setHeader('set-cookie', clearTx);
       // `access_denied` is what a provider sends when the user presses Cancel.
@@ -420,7 +431,14 @@ export function createAuthRoutes(deps: AuthRoutesDeps): Router {
     } catch (error) {
       const unavailable = error instanceof AuthError && error.code === 'AUTH_PROVIDER_UNAVAILABLE';
       outcome(unavailable ? 'provider_unavailable' : 'verification_failed');
-      if (unavailable) log(`sign-in could not complete: AUTH_PROVIDER_UNAVAILABLE — ${error.message}`);
+      // Every cause, not only the provider being down. An AuthError's message
+      // is the platform's own; anything else (the user store, most of all) is
+      // named by class, and the logger redacts the message either way.
+      logCallbackFailure(
+        error instanceof AuthError
+          ? `sign-in could not complete: ${error.code} — ${error.message}`
+          : `sign-in could not complete: ${error instanceof Error ? error.name : 'Error'} (not an identity-provider error; the user store is the usual cause) — ${error instanceof Error ? error.message : String(error)}`,
+      );
       res.setHeader('set-cookie', clearTx);
       const { status, body, retryAfter } = authErrorResponse(error, 'complete sign-in');
       if (retryAfter) res.setHeader('retry-after', retryAfter);

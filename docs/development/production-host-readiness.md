@@ -212,6 +212,7 @@ stack or touches another stack.
 | `capacity.launches` | WARN when `LAB_LAUNCHES_PAUSED` is on: the stack would start refusing every Start Lab |
 | `durability.volumes` | named volumes for postgres, prometheus, alertmanager, grafana |
 | `durability.healthchecks` | postgres, api, terminal, web |
+| `durability.database-first-boot` | the postgres check dials TCP (`pg_isready -h 127.0.0.1`), never the socket the image's initialiser answers on, and tolerates at least 180 s (start_period + interval × retries) before calling a first boot on a new volume unhealthy; the real server reached TCP at +63–65 s on a loaded host |
 | `durability.log-rotation` | every service's container logs rotate (json-file `max-size`; the overlays ship 10 MB × 5), so logs cannot grow until the disk the PostgreSQL volume shares is full |
 | `durability.restart-policy` | every service exactly `restart: unless-stopped` (PR #34); `always` is a FAIL because it would undo `prod stop web` |
 | `backup.status-dir` | absolute host directory, read-only in the api; WARN on the in-checkout default |
@@ -319,11 +320,11 @@ all, the provider must let only this deployment's client obtain tokens for
 `OIDC_AUDIENCE`, and that audience must be dedicated. This is wider than the
 "any account" gap above: it admits other clients, not only other accounts.
 
-**Sign-out does not revoke terminal access.** The terminal token minted for a
-running lab is bound to the lab session and user, not to the browser session,
-and lives up to `TERMINAL_SESSION_TTL_SECONDS` (1 h). A terminal WebSocket
-already open stays open after sign-out. Low risk for five trusted students on
-their own machines; recorded with D13.
+**Sign-out revokes terminal access** (fixed 2026-09-28; previously a terminal
+token outlived sign-out by up to `TERMINAL_SESSION_TTL_SECONDS`, 1 h). The token
+is bound to the browser sign-in that requested it; once that sign-in ends, no
+new shell opens and an open one closes on its next keystroke after an activity
+report (≤ 30 s of typing). See [authentication.md §3.6](../authentication.md).
 
 ## 9. TLS contract
 
@@ -887,7 +888,7 @@ Record each step's output in `/srv/jumptotech/evidence/upgrade-<new commit>/`.
 | A configuration change broke startup | restore `.env.previous` (`0600`), `prod up -d --wait`, preflight |
 | Certificate renewal refused | `tls-install.sh` changes nothing when it refuses, and rolls back itself |
 | New release misbehaves, no new migration | `git checkout $(cat previous-commit)`, `npm ci`, restore `.env.previous` (it holds the previous `JTT_COMMIT`), `make sandbox-build` if the upgrade ran it (`:latest` sandbox tags are overwritten in place; per-release tags avoid this — [private-beta-deployment.md §7.1](../runbooks/private-beta-deployment.md)), `prod up -d --build --wait --wait-timeout 900`, preflight, smoke (`release.commit` PASS on the previous commit) |
-| New release applied a migration | migrations are forward-only. The previous api **refuses to start** on the newer database: the migrator names the versions this release does not ship (`prod logs api`), and with `restart: unless-stopped` the api keeps restarting until the release and the data match. That refusal is the rollback boundary. Either (a) — the default — check out the previous commit and restore `.env.previous` as above, stop the api, then restore the step-3 `pre-migration` archive per [postgres-backup-restore.md §6.4](../runbooks/postgres-backup-restore.md) (renames, never drops; its own rollback is §6.6); anything students wrote after the backup is lost (§8 there). Or (b) keep the newer data and run the previous code on it: set `DATABASE_ALLOW_NEWER_SCHEMA=true` in `.env`, `prod up -d api` — only after reading the migration and judging the previous code safe on it (every migration to date, 001–007, is additive: new tables, columns, indexes, a widened CHECK, a sequence-defaulted column; across 007 the previous terminal also gives up per-session shell uids), and remove it once the release matches again |
+| New release applied a migration | migrations are forward-only. The previous api **refuses to start** on the newer database: the migrator names the versions this release does not ship (`prod logs api`), and with `restart: unless-stopped` the api keeps restarting until the release and the data match. That refusal is the rollback boundary. Either (a) — the default — check out the previous commit and restore `.env.previous` as above, stop the api, then restore the step-3 `pre-migration` archive per [postgres-backup-restore.md §6.4](../runbooks/postgres-backup-restore.md) (renames, never drops; its own rollback is §6.6); anything students wrote after the backup is lost (§8 there). Or (b) keep the newer data and run the previous code on it: set `DATABASE_ALLOW_NEWER_SCHEMA=true` in `.env`, `prod up -d api` — only after reading the migration and judging the previous code safe on it (001–009 are additive: new tables, columns, indexes, a widened CHECK, sequence-defaulted and defaulted columns; across 007 the previous terminal also gives up per-session shell uids. **Not across 010**: it re-keys `access_entitlements` to `(user_id, scope, granted_via)` and pre-010 code writes every access change with `ON CONFLICT (user_id, scope)`, so every grant, trial, suspend, restore and revoke fails, and a suspended student with a subscription can get lab access — [disaster-recovery.md §4.2](../runbooks/disaster-recovery.md); use (a)), and remove it once the release matches again |
 | Security incident | `prod stop web` (stays stopped across reboots with `unless-stopped`); running labs are reclaimed by idle expiry |
 | Stop launches only | tell the cohort; `LAB_LAUNCHES_PAUSED=true` and `prod up -d api` refuses every Start Lab and keeps running labs (runbook §3) |
 

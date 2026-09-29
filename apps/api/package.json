@@ -32,6 +32,7 @@
   },
   "exports": {
     ".": "./src/app.ts",
-    "./config": "./src/config.ts"
+    "./config": "./src/config.ts",
+    "./auth/browser-session": "./src/auth/browser-session.ts"
   }
 }

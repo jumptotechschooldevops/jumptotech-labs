@@ -31,6 +31,37 @@ function serviceBlock(file: string, service: string): string {
   return match?.[1] ?? '';
 }
 
+describe('a serving api is not an unhealthy one', () => {
+  /*
+   * 2026-09-28 observability drill, load 20–40: the image's check fetched
+   * `/health`, which reads the database and every provider live (0.1–14 s),
+   * with a 3 s timeout that also had to boot the `node -e` probe. The api served
+   * every request and was marked unhealthy; web and terminal, which wait on it,
+   * were never created. terminal and sandboxd flipped the same way on static
+   * endpoints, from the probe's own start-up alone.
+   */
+  const MIN_TIMEOUT_SECONDS = 10;
+
+  it('probes readiness from cached checks, like the overlays, not the live /health', () => {
+    const check = /HEALTHCHECK[^\n]*\\\n\s*CMD ([^\n]+)/.exec(read('infrastructure/docker/api.Dockerfile'));
+    expect(check, 'api.Dockerfile has a HEALTHCHECK command').not.toBeNull();
+    expect(check![1]).toContain('/readyz');
+    expect(check![1]).not.toContain('/health');
+  });
+
+  it.each(['api', 'terminal', 'sandboxd'])('gives the %s image probe time to boot on a loaded host', (service) => {
+    const match = /HEALTHCHECK[^\n]*--timeout=(\d+)s/.exec(read(`infrastructure/docker/${service}.Dockerfile`));
+    expect(match, `${service}.Dockerfile has a HEALTHCHECK timeout`).not.toBeNull();
+    expect(Number(match![1])).toBeGreaterThanOrEqual(MIN_TIMEOUT_SECONDS);
+  });
+
+  it.each(['api', 'terminal'])('gives the %s overlay probe the same time', (service) => {
+    const match = /timeout:\s*(\d+)s/.exec(serviceBlock('docker-compose.observability.yml', service));
+    expect(match, `the observability overlay sets the ${service} healthcheck timeout`).not.toBeNull();
+    expect(Number(match![1])).toBeGreaterThanOrEqual(MIN_TIMEOUT_SECONDS);
+  });
+});
+
 describe('a slow api start is not an unhealthy one', () => {
   const MIN_START_PERIOD_SECONDS = 180;
 

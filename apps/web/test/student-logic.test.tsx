@@ -10,7 +10,7 @@ import { render } from '@testing-library/react';
 import { hrefFor, parseRoute } from '../src/lib/router';
 import { describeError } from '../src/lib/errors';
 import { InlineText } from '../src/components/RichText';
-import { codeForClose } from '../src/lib/terminal';
+import { codeForClose, terminalNotice } from '../src/lib/terminal';
 import { describeProvider, describeReset, trackNote } from '../src/lib/environmentInfo';
 
 describe('routes', () => {
@@ -244,6 +244,30 @@ describe('what an API error means to a student', () => {
     expect(page.message).not.toMatch(/undefined|properties/);
     expect(page.guidance).toMatch(/Reload the page/);
   });
+
+  it('never hands a student an api remediation that names an endpoint', () => {
+    // These reach the read-page fallback, which used to render the server's
+    // remediation as guidance: "List the available learning paths with GET
+    // /api/learning-paths."
+    const cases: Array<[string, string]> = [
+      ['LEARNING_PATH_NOT_FOUND', 'List the available learning paths with GET /api/learning-paths.'],
+      ['INVALID_LEARNING_PATH_ID', 'Learning path ids are lowercase slugs, e.g. devops-engineer.'],
+      ['ATTEMPT_NOT_FOUND', 'Attempt ids come from GET /api/me/attempts.'],
+      ['NOT_FOUND', 'Check the path; see GET /api for the endpoints.'],
+      ['INVALID_PATH', 'Check the request path.'],
+      ['FORBIDDEN', 'An administrator can grant the role with operator-cli role set.'],
+    ];
+    for (const [code, remediation] of cases) {
+      for (const context of ['load', 'progress'] as const) {
+        const described = describeError({ code, message: 'raw server words', remediation }, context);
+        expect(`${described.title} ${described.message} ${described.guidance ?? ''}`, code).not.toMatch(
+          /\/api|GET |slug|operator-cli|raw server words/,
+        );
+        expect(described.guidance, code).toBeTruthy();
+        expect(described.reference).toBe(code);
+      }
+    }
+  });
 });
 
 describe('lab prose', () => {
@@ -292,5 +316,17 @@ describe('environment descriptions', () => {
   it('stays neutral for a provider it does not know', () => {
     expect(describeProvider('quantum').name).toBe('Lab environment');
     expect(describeProvider('kubernetes').summary).toMatch(/namespace/);
+  });
+});
+
+describe('the line written into the terminal', () => {
+  it('agrees with the terminal bar when access, not the connection, is the reason', () => {
+    // The bar says the access is inactive and does not retry; the terminal
+    // used to print "The terminal connection was interrupted." beside it.
+    for (const code of ['ACCESS_NOT_ACTIVE', 'LAB_NOT_IN_PLAN', 'ACCESS_PLAN_UNAVAILABLE']) {
+      expect(terminalNotice(code), code).toMatch(/cannot open/);
+    }
+    expect(terminalNotice('SANDBOX_NOT_RUNNING')).toMatch(/not running/);
+    expect(terminalNotice('SOMETHING_NEW')).toBe('The terminal connection was interrupted.');
   });
 });

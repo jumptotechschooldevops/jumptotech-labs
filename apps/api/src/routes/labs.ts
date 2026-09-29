@@ -471,7 +471,13 @@ export function createLabRoutes(deps: SessionRoutesDeps): Router {
             : code === 'PROVIDER_UNAVAILABLE'
               ? 'provider_unavailable'
               : 'provision_failed';
-      recordStart(def, outcome, { durationMs: Date.now() - startedAt, code });
+      // The admitted session, when there was one, so the operator's line is
+      // found by the Support ID the student reads out.
+      recordStart(def, outcome, {
+        durationMs: Date.now() - startedAt,
+        code,
+        ...(admittedSessionId ? { sessionId: admittedSessionId } : {}),
+      });
       await startEvent(def.id, owner.userId, {
         // A refusal took no slot and built nothing; a failure was admitted and broke.
         outcome:
@@ -490,8 +496,13 @@ export function createLabRoutes(deps: SessionRoutesDeps): Router {
           progress.failAttempt(
               opened.attemptId,
               // The student's history keeps the platform's words for why; the
-              // provider's are in the session manager's log.
-              studentMessage(code, error instanceof Error ? error.message : String(error)),
+              // provider's are in the session manager's log. Anything that is
+              // not a session-domain error (a database driver's "connect
+              // ECONNREFUSED <address>") has no words of ours, and is served to
+              // the student by /api/me/attempts, so it gets a fixed sentence.
+              error instanceof SessionError
+                ? studentMessage(code, error.message)
+                : 'The platform could not start the lab environment.',
           ),
         );
       }

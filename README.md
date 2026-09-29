@@ -1926,6 +1926,15 @@ make db-migrate         # the same, reading credentials from .env
   silently ignored — migrations are immutable once applied; add `002_*.sql`.
 - A `pg_advisory_lock` serialises the run, so two API instances starting
   together cannot apply the same migration twice.
+- Every migration after `010` says, in a line of its own, whether the release
+  before it can run on the schema it leaves: `-- rollback: older-code-runs` or
+  `-- rollback: restore-required` (001–010 are classified in
+  `migrator.ts`). The ledger keeps the answer, and a release that finds a
+  version it does not ship recorded `restore-required` refuses to start even
+  with `DATABASE_ALLOW_NEWER_SCHEMA=true`: the way back is the pre-migration
+  archive ([disaster-recovery.md §4.2](docs/runbooks/disaster-recovery.md)).
+  Choose `restore-required` when older code would fail on the new schema or
+  decide wrongly from rows it cannot tell apart.
 
 `DATABASE_AUTO_MIGRATE=true` (the default) runs this at startup. It is not a
 "drop and recreate the schema on boot" scheme: on a database that is already

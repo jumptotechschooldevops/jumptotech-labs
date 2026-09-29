@@ -70,7 +70,7 @@ export function VerificationPanel({
 
         {state.kind === 'error' ? <VerifyError error={state.error} /> : null}
 
-        {state.kind === 'result' ? <VerifyResult result={state.result} newlyCompleted={state.newlyCompleted} /> : null}
+        {state.kind === 'result' ? <VerifyResult result={state.result} newlyCompleted={state.newlyCompleted} alreadyCompleted={alreadyCompleted} /> : null}
       </div>
     </section>
   );
@@ -93,7 +93,15 @@ function VerifyError({ error }: { error: ApiError }) {
   );
 }
 
-function VerifyResult({ result, newlyCompleted }: { result: VerificationResult; newlyCompleted: boolean }) {
+function VerifyResult({
+  result,
+  newlyCompleted,
+  alreadyCompleted,
+}: {
+  result: VerificationResult;
+  newlyCompleted: boolean;
+  alreadyCompleted: boolean;
+}) {
   const passing = result.checks.filter((check) => check.status === 'pass').length;
   const failing = result.checks.filter((check) => check.status === 'fail');
   const skipped = result.checks.filter((check) => check.status === 'skipped').length;
@@ -110,7 +118,9 @@ function VerifyResult({ result, newlyCompleted }: { result: VerificationResult; 
         <p className="verify__text">
           {newlyCompleted
             ? 'Saved to your progress. Keep exploring if you like — when you are done, press End lab to free your environment and see your next lab.'
-            : result.attempt?.status === 'PASSED'
+            : // A completion saved earlier stands even when this check's write
+              // failed and the answer carries no attempt.
+              result.attempt?.status === 'PASSED' || alreadyCompleted
               ? 'This lab is already recorded as completed.'
               : // The api answers a check even when it could not write the result (its
                 // progress store was unreachable), and then returns no attempt.
