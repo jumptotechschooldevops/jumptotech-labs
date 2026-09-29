@@ -75,6 +75,7 @@ fails the build for one that does not:
 | running the beta day to day; `prod` and the helpers | [runbooks/private-beta-operations.md](runbooks/private-beta-operations.md) |
 | teaching a class: the classroom view, what to check when a student is stuck, P0–P3, when to escalate | [runbooks/instructor-guide.md](runbooks/instructor-guide.md) |
 | incidents A–U, by what you see | [runbooks/private-beta-incident-response.md](runbooks/private-beta-incident-response.md) |
+| what fails, what students see, what recovers by itself: failure domains, journeys, failure matrix, measured RPO/RTO, restart order, retention | [reliability-failure-model.md](reliability-failure-model.md) |
 | running an incident: severity, roles, status and class messages, the postmortem template | [runbooks/incident-management.md](runbooks/incident-management.md) |
 | the alert runbooks RB-01…RB-21 and their index | [runbooks/README.md](runbooks/README.md) |
 | backup and restore of PostgreSQL | [runbooks/postgres-backup-restore.md](runbooks/postgres-backup-restore.md) |
@@ -87,7 +88,8 @@ fails the build for one that does not:
 | rehearsed failures | [incident-exercises.md](incident-exercises.md) |
 | the private-beta release decision and its conditions | [releases/private-beta-release-gate.md](releases/private-beta-release-gate.md) |
 | what a deployment must record | [releases/production-host-evidence-template.md](releases/production-host-evidence-template.md) |
-| who may use labs: entitlements, the `ops access` commands, the payment boundary | [commercial-access.md](commercial-access.md) |
+| who may use labs: entitlements, plans, trials, the `ops access` commands | [commercial-access.md](commercial-access.md) |
+| billing: the provider boundary, verified webhooks, the subscription lifecycle (test mode only) | [billing.md](billing.md) |
 
 The alert runbooks, one per alert family:
 [RB-01](runbooks/RB-01-service-down.md) ·
@@ -140,10 +142,12 @@ Dated; not maintained after their pass. Newest first within each group.
 
 | Record | Date |
 |---|---|
+| [releases/student-experience-audit-2026-09-28.md](releases/student-experience-audit-2026-09-28.md) | 2026-09-28 |
 | [releases/lab-certification-2026-09-27.md](releases/lab-certification-2026-09-27.md) | 2026-09-27 |
 | [security/redteam-wave2-2026-09-27.md](security/redteam-wave2-2026-09-27.md) | 2026-09-27 |
 | [security/redteam-audit-2026-09-27.md](security/redteam-audit-2026-09-27.md) | 2026-09-27 |
 | [releases/performance-capacity-certification-2026-09-27.md](releases/performance-capacity-certification-2026-09-27.md) | 2026-09-27 |
+| [releases/reliability-dr-audit-2026-09-28.md](releases/reliability-dr-audit-2026-09-28.md) | 2026-09-28 |
 | [releases/launch-readiness-20h-report.md](releases/launch-readiness-20h-report.md) | 2026-09-27 |
 | [releases/app-security-multi-tenant-audit.md](releases/app-security-multi-tenant-audit.md) | 2026-09-27 |
 | [releases/overnight-disaster-recovery-audit.md](releases/overnight-disaster-recovery-audit.md) | 2026-09-21/22 |

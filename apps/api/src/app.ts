@@ -65,6 +65,8 @@ import { createAdminRoutes } from './routes/admin.js';
 import { createAuthRoutes } from './routes/auth.js';
 import { AccessControl, InMemoryAccessStore } from './access/entitlements.js';
 import { InMemorySessionEventStore, type SessionEventStore } from './classroom/session-events.js';
+import type { BillingProcessor } from './billing/processor.js';
+import { createBillingWebhookRoutes } from './billing/routes.js';
 
 /**
  * The learning-history half of the graph.
@@ -79,6 +81,10 @@ export interface ProgressDeps {
   store: string;
   /** False when history does not outlive the process. */
   durable: boolean;
+}
+
+export interface BillingDeps {
+  processor: BillingProcessor;
 }
 
 export interface CreateAppDeps {
@@ -136,6 +142,11 @@ export interface CreateAppDeps {
   sessionEvents?: SessionEventStore;
   /** When the reaper last finished a sweep, for the classroom view. Absent: unknown. */
   reaperLastSuccessMs?: () => number | undefined;
+  /**
+   * Billing (docs/billing.md). Absent: billing is off — the default, and the
+   * private-beta configuration — and no billing route exists.
+   */
+  billing?: BillingDeps;
   /**
    * Structured logging and metrics — PLATFORM-003.
    *
@@ -260,6 +271,15 @@ export function createApp(deps: CreateAppDeps): Express {
     }
     next();
   });
+
+  /*
+   * The billing webhook reads its own raw bytes — the provider signed those,
+   * not a re-serialisation — so it is registered before the JSON parser. No
+   * CORS, no origin guard, no session: the signature is the authentication.
+   */
+  if (deps.billing) {
+    app.use('/api/billing/webhooks', createBillingWebhookRoutes(deps.billing.processor));
+  }
 
   app.use(express.json({ limit: '16kb' }));
 
@@ -444,6 +464,14 @@ export function createApp(deps: CreateAppDeps): Express {
         list: async () => ('list' in users && typeof users.list === 'function' ? await users.list() : []),
       }),
       deps.config.accessPolicy ?? 'open',
+      () => new Date(),
+      {
+        ...(deps.config.accessPlans ? { plans: deps.config.accessPlans } : {}),
+        ...(deps.config.lifetimes?.maxActiveSessionsPerStudent !== undefined
+          ? { deploymentSessionLimit: deps.config.lifetimes.maxActiveSessionsPerStudent }
+          : {}),
+        trackOfLab: (labId) => (deps.registry.has(labId) ? deps.registry.get(labId).track : undefined),
+      },
     );
   const sessionGuard = createSessionGuard(deps.sessions, audit, access);
   const sessionEvents = deps.sessionEvents ?? new InMemorySessionEventStore();

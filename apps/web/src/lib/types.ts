@@ -241,6 +241,12 @@ export interface LabAccess {
   active: boolean;
   startsAt: string | null;
   expiresAt: string | null;
+  /** STANDARD, BETA or TRIAL; null without an entitlement (or from an older api). */
+  kind?: 'STANDARD' | 'BETA' | 'TRIAL' | null;
+  /** The plan this access is on; null for no plan (every track). */
+  plan?: { id: string; name: string; description: string | null; tracks: 'all' | string[] } | null;
+  /** Labs this student may run at once; null = no per-student limit. */
+  maxConcurrentSessions?: number | null;
 }
 
 /** A lab's standing for this student. Never a boolean. */

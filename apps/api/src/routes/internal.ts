@@ -33,7 +33,7 @@ import type { LabSession, SessionManager } from '@jumptotech/lab-orchestrator';
 import type { ApiConfig } from '../config.js';
 import { asyncRoute, sendError, sendOk } from '../http.js';
 import { sessionErrorResponse } from './sessions.js';
-import { accessDeniedBody, type AccessControl } from '../access/entitlements.js';
+import { accessRefusalBody, type AccessControl } from '../access/entitlements.js';
 
 export interface InternalRoutesDeps {
   sessions: SessionManager;
@@ -186,9 +186,9 @@ export function createInternalRoutes(deps: InternalRoutesDeps): Router {
      * entitlement, is what makes a stale token open no new shell.
      */
     if (deps.access) {
-      const entitled = await deps.access.decide(session.ownerUserId);
+      const entitled = await deps.access.decide(session.ownerUserId, { labId: session.labId });
       if (!entitled.allowed) {
-        sendError(res, 403, accessDeniedBody(entitled.state));
+        sendError(res, 403, accessRefusalBody(entitled));
         return null;
       }
     }

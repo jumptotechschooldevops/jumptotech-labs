@@ -116,6 +116,10 @@ export {
   type ReaperMetrics,
   type TerminalMetrics,
   type SandboxdMetrics,
+  createBillingMetrics,
+  BILLING_WEBHOOK_OUTCOMES,
+  BILLING_PROVIDER_OPS,
+  type BillingMetrics,
 } from './metrics.js';
 
 export {

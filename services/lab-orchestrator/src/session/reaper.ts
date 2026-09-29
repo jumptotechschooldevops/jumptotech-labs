@@ -20,7 +20,10 @@
  * And one interrupted operation is recovered without deleting anything: a
  * session still `RESETTING` after `resetRecoveryGraceMs` becomes `DEGRADED`,
  * which the student can reset again or end, and which idle and absolute expiry
- * still reclaim.
+ * still reclaim. So is an `ACTIVE` session whose container the runtime reports
+ * stopped (`exited`/`dead`) on two sweeps in a row — a host restart leaves every
+ * lab container stopped (they run `--restart no`) under rows that still say
+ * ACTIVE.
  *
  * The orphan rule is what makes this safe across restarts: the in-memory store
  * is lost on restart, but the namespace labels are not, so each sandbox's
@@ -113,6 +116,13 @@ export interface ReaperOptions {
    */
   abandonedStartGraceMs?: number;
   /**
+   * How long an `ACTIVE` session must have been ACTIVE before a stopped
+   * container under it is believed. A start or reset that has just finished
+   * is left alone; the container must also be seen stopped on two
+   * consecutive sweeps.
+   */
+  lostSandboxGraceMs?: number;
+  /**
    * How long a finished session record is kept for the UI to read before it is
    * dropped from the store. Zero keeps them forever.
    */
@@ -159,7 +169,8 @@ export interface ReaperMetricsHooks {
   /**
    * An operation whose owner is gone, made safe or finished by the reaper:
    * `interrupted_reset` (now DEGRADED), `abandoned_end` (the End completed) or
-   * `abandoned_start` (a start that never finished, torn down).
+   * `abandoned_start` (a start that never finished, torn down), or
+   * `sandbox_lost` (an ACTIVE session whose container stopped, now DEGRADED).
    */
   onRecovered?(reason: RecoveryReason, provider: string): void;
   /** A session teardown this sweep drove that was not confirmed gone. */
@@ -172,7 +183,7 @@ export interface ReaperMetricsHooks {
   onDeleteFailed?(provider: string, reason: string): void;
 }
 
-export type RecoveryReason = 'interrupted_reset' | 'abandoned_end' | 'abandoned_start';
+export type RecoveryReason = 'interrupted_reset' | 'abandoned_end' | 'abandoned_start' | 'sandbox_lost';
 
 export interface SweepResult {
   /** Namespaces confirmed gone during this sweep. */
@@ -199,6 +210,9 @@ export class SessionReaper {
   readonly #resetRecoveryGraceMs: number;
   readonly #abandonedEndGraceMs: number;
   readonly #abandonedStartGraceMs: number;
+  readonly #lostSandboxGraceMs: number;
+  /** Sessions whose container was seen stopped on the previous sweep. */
+  #lostLastSweep = new Set<string>();
   readonly #retentionMs: number;
   readonly #providers: ProviderRegistry;
   readonly #metrics: ReaperMetricsHooks;
@@ -220,6 +234,7 @@ export class SessionReaper {
     this.#resetRecoveryGraceMs = Math.max(1, options.resetRecoveryGraceMs ?? 10 * 60_000);
     this.#abandonedEndGraceMs = options.abandonedEndGraceMs ?? 5 * 60_000;
     this.#abandonedStartGraceMs = options.abandonedStartGraceMs ?? 10 * 60_000;
+    this.#lostSandboxGraceMs = options.lostSandboxGraceMs ?? 2 * 60_000;
     this.#retentionMs = options.retentionMs ?? 15 * 60_000;
     this.#providers =
       options.providers ??
@@ -525,8 +540,9 @@ export class SessionReaper {
      */
     let live: Set<string>;
     const finished = new Map<string, LabSession>();
+    let sessions: LabSession[];
     try {
-      const sessions = await this.options.sessions.list();
+      sessions = await this.options.sessions.list();
       live = new Set(
         sessions
           .filter((s) => !isTerminalStatus(s.status))
@@ -543,6 +559,8 @@ export class SessionReaper {
     // Ask every registered provider for the sandboxes it owns. A provider whose
     // backend is unreachable reports the error and the sweep continues — one
     // sick backend must not stop another's cleanup.
+    // What each provider that answered says about the sandboxes it owns.
+    const phases = new Map<string, string>();
     for (const provider of this.#providers.all()) {
       let managed: ManagedSandbox[];
       try {
@@ -551,6 +569,7 @@ export class SessionReaper {
         result.errors.push(`listing ${provider.id} sandboxes: ${describe(error)}`);
         continue;
       }
+      for (const sandbox of managed) phases.set(`${provider.id}/${sandbox.sandboxRef}`, sandbox.phase);
 
       // Counted even when the grace period means nothing is deleted yet: the
       // gauge answers "how many sandboxes is nobody accounting for", and one
@@ -597,6 +616,54 @@ export class SessionReaper {
 
       this.#orphansThisSweep[provider.id] = orphans;
     }
+
+    await this.#reconcileStoppedSandboxes(result, sessions, phases, now);
+  }
+
+  /**
+   * ACTIVE sessions whose container has stopped: made DEGRADED, never deleted.
+   *
+   * Reliability audit 2026-09-28, measured on a compose stack: after a host
+   * restart every lab container is stopped (`--restart no`), every row still
+   * says ACTIVE, the terminal cannot attach and Check answers
+   * ENVIRONMENT_UNREACHABLE — and nothing changed that until idle expiry,
+   * twenty minutes of a dead lab holding the student's one slot. DEGRADED is
+   * what the web already explains ("not usable as it is: reset or end"), and
+   * idle and absolute expiry still reclaim it.
+   *
+   * Conservative on purpose: only the runtime's own word that the container is
+   * `exited` or `dead` counts (an absent sandbox, a provider that did not
+   * answer, or a Kubernetes namespace never does); it must be seen on two
+   * consecutive sweeps; the session must have been ACTIVE for
+   * `lostSandboxGraceMs`; and the write is fenced on the status stamp read,
+   * so a reset or start that moved the row meanwhile is never overridden.
+   */
+  async #reconcileStoppedSandboxes(
+    result: SweepResult,
+    sessions: readonly LabSession[],
+    phases: ReadonlyMap<string, string>,
+    now: number,
+  ): Promise<void> {
+    const seen = new Set<string>();
+    for (const session of sessions) {
+      if (session.status !== 'ACTIVE' || session.sandboxKind !== 'container') continue;
+      const phase = phases.get(`${session.provider}/${session.sandboxRef ?? session.namespace}`);
+      if (phase !== 'exited' && phase !== 'dead') continue;
+      if (now - Date.parse(session.statusChangedAt) < this.#lostSandboxGraceMs) continue;
+      seen.add(session.sessionId);
+      if (!this.#lostLastSweep.has(session.sessionId)) continue;
+      try {
+        const degraded = await this.options.sessions.markSandboxStopped(session);
+        if (degraded) {
+          result.recovered.push(session.sessionId);
+          this.#emit((m) => m.onRecovered?.('sandbox_lost', session.provider));
+          this.#log(`recovered ${session.sessionId}: its container is ${phase}; the session is now DEGRADED (lab=${session.labId})`);
+        }
+      } catch (error) {
+        result.errors.push(`${session.sandboxRef ?? session.namespace}: ${describe(error)}`);
+      }
+    }
+    this.#lostLastSweep = seen;
   }
 
   #recordOrphanOutcome(

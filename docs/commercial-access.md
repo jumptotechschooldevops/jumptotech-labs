@@ -14,7 +14,7 @@ socket (`apps/api/src/operator.ts`).
 - [6. Operator runbook](#6-operator-runbook)
 - [7. Who can change access, and the audit trail](#7-who-can-change-access-and-the-audit-trail)
 - [8. Diagnosing an access problem](#8-diagnosing-an-access-problem)
-- [9. The future payment boundary](#9-the-future-payment-boundary)
+- [9. The payment boundary](#9-the-payment-boundary)
 - [10. Plans, trials and limits](#10-plans-trials-and-limits)
 - [11. Data lifecycle](#11-data-lifecycle)
 - [12. Operator decisions required](#12-operator-decisions-required)
@@ -29,13 +29,16 @@ Six separate concepts, each stored separately. None implies another.
 | **Identity** | Who is this person, permanently? | `users` — `(issuer, subject)` is the identity; email and name are descriptive | First sign-in (created); every sign-in (email and name refreshed) |
 | **Authentication** | Did they prove it just now? | `auth_sessions` (a hash of the browser cookie), or a verified bearer token | Sign-in, sign-out, cookie expiry |
 | **Role** | What staff powers do they hold? | `users.role` — STUDENT, INSTRUCTOR, ADMIN | Database only; never a token claim |
-| **Entitlement** | May they *use labs*, and until when? | `access_entitlements` (one row per user and scope) | The operator socket only (§6) |
+| **Entitlement** | May they *use labs*, and until when? | `access_entitlements` (one row per user, scope and source) | The operator socket (§6), and verified billing events ([billing.md](billing.md)) |
+| **Plan** | *What* may they use: which tracks, how many labs at once? | Configuration (`ACCESS_PLANS_JSON` / `ACCESS_PLANS_FILE`); the entitlement names one by id | The deployment's `.env` (§10) |
 | **Lab session** | What are they running right now? | `lab_sessions` | Start, End, the reaper |
 | **Progress** | What have they done? | `students`, `lab_attempts`, `lab_progress`, `hint_usage` | Start, Check, hints |
 
 Not modelled, because nothing in the product needs them yet: organisations,
-cohorts, courses, per-track or per-lab sales, invitations, plans, prices,
-subscriptions, payments. §9 and §10 say where each would attach.
+cohorts, courses, per-lab sales, invitations, prices. §9 and §10 say where
+each would attach. Subscriptions and payments are in [billing.md](billing.md),
+test mode only. Plans (what a grant covers), kinds
+(ordinary, private beta, trial) and trials were added in migration 009 (§10).
 
 ## 2. What changed
 
@@ -101,6 +104,31 @@ The window is half-open: access begins *at* `startsAt` and has ended *at*
 Repeating a change already in effect writes nothing and says so. A retried
 command is harmless.
 
+### 4.1 Kinds and trials
+
+Every entitlement also has a **kind** — a label for people, not a permission:
+
+| Kind | Meaning | How it is created |
+|---|---|---|
+| `STANDARD` | Ordinary access (every row before migration 009) | `grant` (the default for a first grant) |
+| `BETA` | A private-beta participant | `grant --kind beta` |
+| `TRIAL` | A time-limited trial | `trial` only — once per account, for `TRIAL_DURATION_DAYS` |
+
+Rules the code enforces, so a support engineer cannot break them by accident:
+
+- A **trial** starts only with `access trial`, only when trials are configured
+  (`TRIAL_DURATION_DAYS` set — there is no default length), only for an account
+  that has **never** had a trial (the history is checked under the user's lock,
+  so two racing requests start one), and not while the account already has
+  active access or is suspended.
+- `grant --kind trial` only *changes* an existing trial (a deliberate
+  extension); it never starts one.
+- A `grant` on an account currently on a trial must say `--kind standard` or
+  `--kind beta` (convert it) or `--kind trial` (extend it): the two are
+  different decisions, so neither is guessed.
+- A `grant` without `--kind` or `--plan` keeps the row's kind and plan, the same
+  way it keeps the start: extending a beta student leaves them in the beta.
+
 Changes are serialised per student (a row lock on the user), and each change is
 written in the same transaction as its audit event.
 
@@ -127,7 +155,16 @@ effect on the next request — no sign-out, no job, no restart.
 
 The refusal is `403 ACCESS_NOT_ACTIVE` with `details.accessState` (NONE,
 SCHEDULED, EXPIRED, SUSPENDED or REVOKED). It never carries who changed the
-access, when, or the operator's reason. For somebody else's session the answer
+access, when, or the operator's reason.
+
+Active access on a **plan** (§10) is also checked against the lab's track on
+every route above — Start by the lab asked for, every other route by the
+session's lab, so a plan change reaches a running lab on its next use:
+
+| Refusal | Meaning |
+|---|---|
+| `403 LAB_NOT_IN_PLAN` (`details.track`, `details.planId`) | Access is active; the plan does not include this lab's track |
+| `403 ACCESS_PLAN_UNAVAILABLE` | Access is active on a plan the configuration no longer defines. Refused, never read as "no plan" (which would mean every track); logged `access.plan_unknown` | For somebody else's session the answer
 is still `404 SESSION_NOT_FOUND`, exactly as before — the access check runs
 after ownership.
 
@@ -187,6 +224,19 @@ ops access grant <user-id> --from 2026-11-01T09:00:00Z --until 2027-01-31T23:59:
 
 The student can start a lab on their next request — no sign-out needed.
 
+With plans configured (§10), a grant may name one, and a beta participant is
+labelled as such:
+
+```bash
+ops access grant <user-id> --until 2026-12-31T23:59:59Z --kind beta --by aisalkyn --reason "private beta cohort 1"
+ops access grant <user-id> --until 2026-12-31T23:59:59Z --plan beta --by aisalkyn --reason "cohort 1 on the beta plan"
+ops access grant <user-id> --until 2026-12-31T23:59:59Z --no-plan --by aisalkyn --reason "every track again"
+ops access plans                     # the configured plans, and whether trials are on
+```
+
+`--plan` must name a plan configured now; anything else is refused with the
+list of plans that exist.
+
 ### 6.3 Verify access and inspect status
 
 ```bash
@@ -232,7 +282,22 @@ ops access revoke <user-id> --by aisalkyn --reason "…" --end-sessions --yes
 Revocation deletes nothing: the account still signs in, and the student still
 sees their progress and history. A later `grant` restores lab use.
 
-### 6.7 Mistakes
+### 6.7 Trials
+
+```bash
+ops access trial <user-id> --by support --reason "asked for a trial after the webinar"
+```
+
+Starts a trial of `TRIAL_DURATION_DAYS` on `TRIAL_PLAN` (if set), now. Refused
+with `TRIALS_DISABLED` when no length is configured, `TRIAL_ALREADY_USED` for
+an account that has ever had one, and `ALREADY_ACTIVE` for an account that
+already has access. A trial expires by itself; converting it is a grant:
+
+```bash
+ops access grant <user-id> --until 2027-01-31T23:59:59Z --kind standard --by aisalkyn --reason "paid after trial, invoice 1043"
+```
+
+### 6.8 Mistakes
 
 | Mistake | Fix | What the history shows |
 |---|---|---|
@@ -243,7 +308,7 @@ sees their progress and history. A later `grant` restores lab use.
 
 Nothing is ever edited or deleted in the history. Never correct access with SQL.
 
-### 6.8 Audit administrative changes
+### 6.9 Audit administrative changes
 
 `ops access show <user-id>` prints a student's recent history. For all changes,
 a read-only query against the database (via `make db-shell` on the host,
@@ -251,7 +316,7 @@ a read-only query against the database (via `make db-shell` on the host,
 
 ```sql
 SELECT e.occurred_at, e.action, e.actor, e.reason, e.before_status, e.after_status,
-       e.after_expires_at, u.email
+       e.after_expires_at, e.after_kind, e.after_plan_id, u.email
   FROM access_events e JOIN users u USING (user_id)
  ORDER BY e.occurred_at DESC LIMIT 100;
 ```
@@ -307,73 +372,88 @@ recent denials:
 prod logs --since 1h api | grep '"authorizationResult":"denied-access"' | grep '<user-id>'
 ```
 
-## 9. The future payment boundary
+## 9. The payment boundary
 
 **A payment provider changes entitlements. It never becomes authentication,
-and never bypasses authorization.**
+and never bypasses authorization.** It is built, in test mode only, and
+documented in [billing.md](billing.md): a provider boundary, a test provider,
+verified and idempotent webhooks, and the subscription lifecycle.
 
 ```text
-  payment provider ──webhook──► verify signature, dedupe the event id
-                                        │  (a new, separate component)
-                                        ▼
-                      the same mutation the operator socket calls:
-                      AccessStore.mutate({ userId, action: GRANT|SUSPEND|REVOKE,
-                                           actor, reason, grant: { startsAt?, expiresAt } })
-                                        │
-                                        ▼
-                         access_entitlements  +  access_events
-                                        │
-                                        ▼
-            AccessControl.decide(userId)  — unchanged, on every lab-use request
+  payment provider ──signed webhook──► verify, dedupe, order (billing/processor.ts)
+                                                │  one transaction
+                                                ▼
+                      AccessStore.mutate({ source: 'billing', action: SYNC, sync: … })
+                                                │
+                                                ▼
+                     access_entitlements (billing's row)  +  access_events
+                                                │
+                                                ▼
+            AccessControl.decide(userId) — every row of the account, on every lab-use request
 ```
 
-What already exists for it:
-
-- **One write path.** `AccessStore.mutate` (`apps/api/src/access/entitlements.ts`)
-  is atomic, serialised per user, idempotent for a repeated change, and writes
-  its own audit event. A webhook handler calls it; it does not write SQL.
-- **`granted_via`** says how a row came to exist; only `operator` exists today.
-  A payment integration adds its value (e.g. `payment`) in a new migration, so
-  support can always tell a manual grant from a paid one.
-- **Explicit windows.** A subscription period, a fixed-length cohort and a
-  trial are all a `[startsAt, expiresAt)`; nothing assumes a length.
+- **Sources.** An account has at most one row per source: `operator` (§6) and
+  `billing`. They never overwrite each other (billing.md §6).
+- **Suspension is account-wide.** `ops access suspend` suspends every row,
+  including billing's; billing events cannot lift it.
+- **Revocation is the operator's row only.** A paid subscription is cancelled
+  at the provider.
 - **Identity untouched.** Sign-in, `users`, `auth_sessions` and roles do not
-  change when payment does.
-
-What a payment integration must add (not built here):
-
-1. **Customer ↔ account mapping.** A provider knows a customer and an email;
-   the platform knows `(issuer, subject)`. Mapping by email is unsafe (§6.1).
-   The robust shape is: the signed-in student starts checkout, and the platform
-   passes its own internal user id as the provider's client reference, so the
-   verified webhook names the account directly.
-2. **Webhook verification** (signature, timestamp) and **event deduplication**
-   (a processed-event table keyed by the provider's event id).
-3. **An external reference** on the entitlement or event (subscription id) and
-   a `granted_via` value — a new migration.
-4. **Precedence rules** between manual and paid grants (§12).
+  change when payment does. A customer is bound to an account only through a
+  checkout this platform started for that account.
 
 ## 10. Plans, trials and limits
 
-- **Free trial** — a grant with `--until` a fixed interval from now. No trial
-  length exists in the code; choose it (§12).
+An entitlement says *whether* and *until when*; a **plan** says *what*. Plans
+are configuration, not code — the product has not decided which plans exist, so
+none is built in — and they never carry a price: what a plan costs is decided
+with, and charged by, a billing provider (§9).
+
+```bash
+# .env — one line of JSON (or ACCESS_PLANS_FILE=<path> to a file with the same document)
+ACCESS_PLANS_JSON='{"plans":[{"id":"beta","name":"Private beta","tracks":"all"},{"id":"linux-only","name":"Linux","tracks":["linux"],"maxConcurrentSessions":1}]}'
+```
+
+| Field | Meaning |
+|---|---|
+| `id` | Stored on entitlements: 1–32 of `a-z`, `0-9`, `-`. Never rename one that is in use |
+| `name`, `description` | Shown to the student (`GET /api/me/access`) and the operator |
+| `tracks` | `"all"`, or a list of track ids. **Required**: an absent list never means "everything". Every id must exist in the lab catalog, or the api refuses to start |
+| `maxConcurrentSessions` | Optional, 1–100: labs one holder may run at once. Capped by `MAX_ACTIVE_SESSIONS_PER_STUDENT` |
+
+Unknown fields are refused (so a `price` cannot creep in), as are duplicate ids
+and a document that is not valid JSON. **No plans configured** is the default
+and means exactly what it meant before plans existed: every grant covers every
+track, with the deployment's limits. An entitlement with no plan (`--no-plan`,
+or every row that predates migration 009) is the same.
+
+**Plans can only narrow the safety limits, never widen them.** The session
+manager takes the lower of the plan's `maxConcurrentSessions` and
+`MAX_ACTIVE_SESSIONS_PER_STUDENT`, inside the same capacity lock that enforces
+`MAX_ACTIVE_SESSIONS` for the whole platform. A plan cannot raise either.
+
+**Removing a plan that entitlements still name** refuses those students' lab
+use (`ACCESS_PLAN_UNAVAILABLE`, §5) and logs `access.plan_unknown` until the
+plan is restored or they are granted another. Find them first:
+`ops access list` shows `KIND/PLAN`.
+
+**Trials**: `TRIAL_DURATION_DAYS` (1–365) turns them on; unset, they are off.
+`TRIAL_PLAN` optionally names the plan a trial is on. §4.1 has the rules.
+
+How the usual commercial arrangements map onto this:
+
+- **Private beta** — `grant --kind beta` with an `--until` (§6.2).
+- **Free trial** — `trial` (§6.7), once per account.
 - **Paid fixed-duration cohort** — a grant with `--from`/`--until`.
 - **Monthly subscription** — a grant renewed each period; lapses on its own if
-  a renewal is missed.
+  a renewal is missed. A payment integration would make the same change (§9).
 - **Scholarship / manual access** — a grant with a reason saying so.
 - **Staff / instructor** — a grant (`--no-expiry` if appropriate). Roles do not
   bypass access (§12).
+- **A track sold separately** — a plan whose `tracks` lists it.
 
-**Resource limits are unchanged and still apply to everyone with access:**
-`MAX_ACTIVE_SESSIONS_PER_STUDENT` (beta: 1) and `MAX_ACTIVE_SESSIONS` are
-enforced inside the session manager's capacity lock, after the access check, so
-an entitlement cannot raise either. A per-plan limit (e.g. two concurrent labs
-for one tier) would be a column on the entitlement read at that same point; it
-does not exist.
-
-Scope is `platform` only: every lab. Selling a track, course or cohort
-separately is a new scope value and a check in `AccessControl.decide` that
-takes the lab — a migration and one function, not a redesign.
+Selling a single lab, or a course that is not a track, is not a plan: it would
+need a new dimension in `AccessControl.decide`.
 
 ## 11. Data lifecycle
 
@@ -409,8 +489,11 @@ for accounting, and how it interacts with backups — is an operator decision
 | **Who may sign in at all** ([authentication.md §4.7](authentication.md)) | Anyone the issuer authenticates can sign in, see the catalog and their (empty) history; only entitled accounts can use labs |
 | **Invitations**: grant before first sign-in (by email) | Not supported: the student signs in first, then is granted. Granting by email would make an address an identity |
 | **An authenticated admin identity** inside the application (named operators, per-person permissions) | Host shell access is the admin boundary; `--by` is attribution (§7) |
-| **Trial length, cohort length, renewal rules, prices** | None exist in code |
-| **Manual vs paid grant precedence** once payment exists | Only manual grants exist |
+| **Which plans exist, what each includes, and their prices** | No plan is built in; `ACCESS_PLANS_JSON` holds whatever is decided, never a price |
+| **Trial length, and whether trials exist at all** | Trials are off until `TRIAL_DURATION_DAYS` is set |
+| **Self-service trials** (a student starts their own) | Not built: only an operator starts one. A self-service start is an endpoint that grants access to anyone who can sign in, so it waits for a decision about who may sign in and about abuse (one person, many identities) |
+| **Cohort length, renewal rules** | None exist in code |
+| **Manual vs paid grant precedence** | Separate rows; the operator's non-trial row answers when both are active ([billing.md §6](billing.md#6-subscriptions-and-manual-grants-together)) |
 | **Account deletion / anonymisation, and retention** of users, progress, access history and backups | Everything is kept indefinitely; backups follow `BACKUP_RETENTION_DAYS` |
 | **Showing the access window to students** (e.g. "access until 31 Dec") | `GET /api/me/access` returns it; the page shows the state only |
 | **Sign out everywhere** when an account is compromised (`destroyAllForUser` exists, nothing calls it) | Not available to operators |
@@ -431,11 +514,13 @@ for accounting, and how it interacts with backups — is an operator decision
 
 | Suite | Proves |
 |---|---|
+| `apps/api/test/access-plans.test.ts` | the plan document's rules (explicit tracks, no unknown fields, no price), the per-student cap, trial terms with no default |
+| `apps/api/test/access-plans-enforcement.test.ts` | track gating on Start and on a running lab, the plan's session limit never above the deployment's, an unconfigured plan refused, beta grants, trial once per account and ending by the clock, no self-service path |
 | `apps/api/test/access-entitlements.test.ts` | the transition table, window boundaries, instants and offsets, input rules, idempotence, serialised concurrent changes, fail-closed store |
 | `apps/api/test/commercial-access.test.ts` | enforcement on every route in §5, the full lifecycle over HTTP, the credential exchange, no self-service path, no mass assignment, no enumeration, the per-student limit, the policy default and refusal |
 | `apps/api/test/operator-access.test.ts` | every operator command over a real socket and the real CLI, attribution, refusals, idempotence, `--end-sessions --yes`, what is logged and what never is |
-| `apps/api/test/access-persistence-integration.test.ts` | migration 006 on real PostgreSQL, two processes racing, restart, schema constraints (`make test-db`) |
-| `services/progress/test/migrations.test.ts` | migration 006 is additive, one row per user, no cascade, no credential column |
+| `apps/api/test/access-persistence-integration.test.ts` | migrations 006 and 009 on real PostgreSQL, 009 over rows written before it, two processes racing (grants and trials), restart, schema constraints (`make test-db`) |
+| `services/progress/test/migrations.test.ts` | migrations 006 and 009 are additive, one row per user, no cascade, no credential or price column |
 | `apps/web/test/dashboard.test.tsx`, `student-logic.test.tsx` | the student-facing words, and never "a platform problem" |
 | `services/observability/test/production-host-contract.test.ts`, `production:config-check --self-test` | the production `access.policy` warning |
 | `infrastructure/observability/prometheus/tests/lab-start-alerts.test.yml` case 10 | an `access_denied` Start pages nobody |

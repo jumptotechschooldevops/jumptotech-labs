@@ -7,12 +7,19 @@
  * window survives the round trip to the millisecond, and a new process sees
  * exactly what the old one wrote.
  *
+ * Migration 009 (kind and plan) is proven the same way, including over a
+ * database that already holds 006-era rows, which must read as what they
+ * meant: STANDARD, no plan.
+ *
  * Named `*-integration` and gated on `RUN_DB_TESTS`, per `test-support/README.md`.
  *
  *   make test-db TEST_DB_PORT=55463
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { PostgresDatabase, migrate } from '@jumptotech/progress';
+import { cp, mkdtemp, readdir } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { MIGRATIONS_DIR, PostgresDatabase, migrate } from '@jumptotech/progress';
 
 import { PostgresUserRepository } from '../src/auth/users.js';
 import { PostgresAccessStore } from '../src/access/postgres-store.js';
@@ -127,7 +134,7 @@ if (!enabled) {
         now,
       );
       const fresh = new AccessControl(new PostgresAccessStore(connect()), 'entitlement', now);
-      expect(await fresh.decide(userId)).toEqual({ allowed: true, via: 'entitlement' });
+      expect(await fresh.decide(userId)).toMatchObject({ allowed: true, via: 'entitlement' });
       const later = new AccessControl(new PostgresAccessStore(connect()), 'entitlement', () => new Date('2026-10-02T00:00:00.000Z'));
       expect(await later.decide(userId)).toEqual({ allowed: false, state: 'EXPIRED' });
     });
@@ -165,6 +172,52 @@ if (!enabled) {
       await expect(db.query('DELETE FROM users WHERE user_id = $1', [userId])).rejects.toThrow(/foreign key/);
     });
 
+    it('stores kind and plan, keeps them on extension, and starts a trial once even with two processes racing', async () => {
+      const a = new PostgresAccessStore(connect());
+      const b = new PostgresAccessStore(connect());
+      const { userId } = await student('gina');
+      await a.mutate(
+        { userId, action: 'GRANT', actor: 'ops', reason: 'beta', grant: { expiresAt: null, kind: 'BETA', planId: 'fixture-linux' } },
+        now,
+      );
+      await b.mutate({ userId, action: 'GRANT', actor: 'ops', reason: 'extend', grant: { expiresAt: '2027-01-01T00:00:00.000Z' } }, now);
+      expect(await a.get(userId)).toMatchObject({ kind: 'BETA', planId: 'fixture-linux', expiresAt: '2027-01-01T00:00:00.000Z' });
+      const history = await b.events(userId, 10);
+      expect(history.map((e) => [e.action, e.before?.kind ?? null, e.after.kind, e.after.planId])).toEqual([
+        ['GRANT', 'BETA', 'BETA', 'fixture-linux'],
+        ['GRANT', null, 'BETA', 'fixture-linux'],
+      ]);
+
+      const { userId: fresh } = await student('hugo');
+      const trial = { durationDays: 7, planId: null };
+      const results = await Promise.allSettled([
+        a.mutate({ userId: fresh, action: 'TRIAL', actor: 'ops', reason: 'one', trial }, now),
+        b.mutate({ userId: fresh, action: 'TRIAL', actor: 'ops', reason: 'two', trial }, now),
+      ]);
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+      const lost = results.find((r) => r.status === 'rejected') as PromiseRejectedResult;
+      expect(['TRIAL_ALREADY_USED', 'ALREADY_ACTIVE']).toContain(lost.reason.code);
+      expect(await a.get(fresh)).toMatchObject({ kind: 'TRIAL', expiresAt: '2026-10-08T12:00:00.123Z' });
+      // Still once per account after it is revoked: the history remembers.
+      await a.mutate({ userId: fresh, action: 'REVOKE', actor: 'ops', reason: 'x' }, now);
+      await expect(a.mutate({ userId: fresh, action: 'TRIAL', actor: 'ops', reason: 'three', trial }, now)).rejects.toMatchObject({
+        code: 'TRIAL_ALREADY_USED',
+      });
+    });
+
+    it('refuses a kind or plan id the schema does not allow', async () => {
+      const { userId } = await student('ines');
+      const insert = (kind: string, plan: string | null) =>
+        db.query(
+          `INSERT INTO access_entitlements (user_id, scope, status, starts_at, expires_at, granted_via, kind, plan_id)
+                VALUES ($1, 'platform', 'ACTIVE', now(), NULL, 'operator', $2, $3)`,
+          [userId, kind, plan],
+        );
+      await expect(insert('VIP', null)).rejects.toThrow(/access_entitlements_kind/);
+      await expect(insert('STANDARD', 'Gold Plan')).rejects.toThrow(/access_entitlements_plan_id/);
+      await insert('STANDARD', 'fixture-linux');
+    });
+
     it('refuses an unknown account without a cast error', async () => {
       const store = new PostgresAccessStore(db);
       await expect(
@@ -174,6 +227,82 @@ if (!enabled) {
         store.mutate({ userId: 'usr-00000001', action: 'GRANT', actor: 'o', reason: 'x', grant: { expiresAt: null } }, now),
       ).rejects.toMatchObject({ code: 'USER_NOT_FOUND' });
       expect(await store.get('usr-00000001')).toBeNull();
+    });
+  });
+
+  describe('migration 009 over an existing 006-era database', () => {
+    it('reads existing rows as STANDARD with no plan, and a second run applies nothing', { timeout: 300_000 }, async () => {
+      const name = `jtt_upgrade_${process.pid}_${Date.now()}`;
+      // CREATE/DROP DATABASE copy a template: slow on a busy host, so not under
+      // the 10 s statement timeout the suite's pool uses.
+      const admin = PostgresDatabase.fromConfig({
+        url: url!,
+        ssl: false,
+        maxConnections: 1,
+        connectionTimeoutMs: 30_000,
+        idleTimeoutMs: 5_000,
+        statementTimeoutMs: 120_000,
+        applicationName: 'jumptotech-access-upgrade-admin',
+      });
+      pools.push(admin);
+      await admin.query(`CREATE DATABASE ${name}`);
+      const target = new URL(url!);
+      target.pathname = `/${name}`;
+      const old = PostgresDatabase.fromConfig({
+        url: target.toString(),
+        ssl: false,
+        maxConnections: 2,
+        connectionTimeoutMs: 5_000,
+        idleTimeoutMs: 5_000,
+        statementTimeoutMs: 120_000,
+        applicationName: 'jumptotech-access-upgrade-test',
+      });
+      try {
+        // The release before 009: every migration up to it, and rows it wrote.
+        const before = await mkdtemp(path.join(tmpdir(), 'jtt-mig-before-009-'));
+        for (const file of await readdir(MIGRATIONS_DIR)) {
+          if (file.endsWith('.sql') && file < '009') await cp(path.join(MIGRATIONS_DIR, file), path.join(before, file));
+        }
+        await migrate(old, { dir: before });
+        const user = await new PostgresUserRepository(old).upsert({ issuer: 'https://issuer.example.com/', subject: 'legacy' });
+        await old.query(
+          `INSERT INTO access_entitlements (user_id, scope, status, starts_at, expires_at, granted_via)
+                VALUES ($1, 'platform', 'ACTIVE', '2026-09-01T00:00:00Z', NULL, 'operator')`,
+          [user.userId],
+        );
+        await old.query(
+          `INSERT INTO access_events (user_id, scope, action, actor, reason, after_status, after_starts_at)
+                VALUES ($1, 'platform', 'GRANTED', 'ops', 'before 009', 'ACTIVE', '2026-09-01T00:00:00Z')`,
+          [user.userId],
+        );
+
+        const report = await migrate(old);
+        expect(report.applied[0]).toBe('009_access_plans_and_kinds');
+        // 010 (billing) widens the key and the kinds; the legacy row is an operator row.
+        expect(report.applied).toContain('010_billing');
+        expect((await migrate(old)).applied).toEqual([]);
+
+        const store = new PostgresAccessStore(old);
+        expect(await store.get(user.userId)).toMatchObject({ status: 'ACTIVE', kind: 'STANDARD', planId: null, expiresAt: null });
+        expect(await store.grants(user.userId)).toEqual([expect.objectContaining({ grantedVia: 'operator' })]);
+        const [event] = await store.events(user.userId, 1);
+        expect(event).toMatchObject({ action: 'GRANT', reason: 'before 009', after: { kind: 'STANDARD', planId: null } });
+        // And the access it grants is exactly what it was: every track.
+        const decision = await new AccessControl(store, 'entitlement', now).decide(user.userId, { track: 'kubernetes' });
+        expect(decision).toMatchObject({ allowed: true, plan: null });
+
+        // A release that predates 009 still inserts: its INSERT names neither column.
+        const other = await new PostgresUserRepository(old).upsert({ issuer: 'https://issuer.example.com/', subject: 'rolling' });
+        await old.query(
+          `INSERT INTO access_entitlements (user_id, scope, status, starts_at, expires_at, granted_via)
+                VALUES ($1, 'platform', 'ACTIVE', now(), NULL, 'operator')`,
+          [other.userId],
+        );
+        expect(await store.get(other.userId)).toMatchObject({ kind: 'STANDARD', planId: null });
+      } finally {
+        await old.close().catch(() => undefined);
+        await admin.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
+      }
     });
   });
 }

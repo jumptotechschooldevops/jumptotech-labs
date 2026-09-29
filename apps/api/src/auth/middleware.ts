@@ -11,7 +11,7 @@ import { AuthError, type AuthenticatedUser, type IdentityResolver } from './iden
 import type { BrowserSessionAuthenticator } from './browser-authenticator.js';
 import { authorize, type Action } from './policy.js';
 import { sendError } from '../http.js';
-import { accessDeniedBody, requiresLabAccess, type AccessControl } from '../access/entitlements.js';
+import { accessRefusalBody, refusalState, requiresLabAccess, type AccessControl } from '../access/entitlements.js';
 
 declare module 'express-serve-static-core' {
   interface Request {
@@ -34,7 +34,11 @@ export interface AuthAuditEvent {
     /** Owner or not, the caller's lab access is not ACTIVE (docs/commercial-access.md). */
     | 'denied-access'
     | 'unauthenticated';
-  /** Set with `denied-access`: NONE, SCHEDULED, EXPIRED, SUSPENDED or REVOKED. Never an operator's reason. */
+  /**
+   * Set with `denied-access`: NONE, SCHEDULED, EXPIRED, SUSPENDED or REVOKED, or
+   * LAB_NOT_IN_PLAN / PLAN_UNAVAILABLE for active access that does not cover
+   * the lab. Never an operator's reason.
+   */
   accessState?: string;
   timestamp: string;
 }
@@ -256,7 +260,7 @@ export function createSessionGuard(
     // Asked only of an owner (or a permitted role): one audit line per request,
     // carrying the decision that actually answered it.
     const entitled = decision.allowed && access && requiresLabAccess(action)
-      ? await access.decide(user.userId)
+      ? await access.decide(user.userId, { labId: session.labId })
       : null;
     const denied = entitled && !entitled.allowed ? entitled : null;
 
@@ -274,7 +278,7 @@ export function createSessionGuard(
             : decision.reason === 'role'
               ? 'denied-role'
               : 'denied-not-owner',
-      ...(denied ? { accessState: denied.state } : {}),
+      ...(denied ? { accessState: refusalState(denied) } : {}),
       timestamp: new Date().toISOString(),
     });
 
@@ -285,7 +289,7 @@ export function createSessionGuard(
     if (denied) {
       // 403, not 404: the caller owns this session, so there is nothing to
       // hide, and "your access has ended" is what they need to hear.
-      sendError(res, 403, accessDeniedBody(denied.state));
+      sendError(res, 403, accessRefusalBody(denied));
       return null;
     }
 

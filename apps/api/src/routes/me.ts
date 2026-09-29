@@ -255,7 +255,17 @@ export function createMeRoutes(deps: MeRoutesDeps): Router {
     sendOk(res, {
       access: access
         ? await access.describe(user.userId)
-        : { policy: 'open', state: 'NONE', active: true, startsAt: null, expiresAt: null },
+        : {
+            policy: 'open',
+            state: 'NONE',
+            active: true,
+            startsAt: null,
+            expiresAt: null,
+            kind: null,
+            source: null,
+            plan: null,
+            maxConcurrentSessions: null,
+          },
     });
   }));
 

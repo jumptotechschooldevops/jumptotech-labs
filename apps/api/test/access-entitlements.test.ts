@@ -35,6 +35,8 @@ function row(status: EntitlementStatus, startsAt: string, expiresAt: string | nu
     startsAt,
     expiresAt,
     grantedVia: 'operator',
+    kind: 'STANDARD',
+    planId: null,
     createdAt: startsAt,
     updatedAt: startsAt,
   };
@@ -86,7 +88,7 @@ describe('planMutation: the transition table', () => {
     expect(planMutation(null, 'GRANT', NOW, { expiresAt: until })).toEqual({
       kind: 'write',
       action: 'GRANT',
-      next: { status: 'ACTIVE', startsAt: NOW, expiresAt: until },
+      next: { status: 'ACTIVE', startsAt: NOW, expiresAt: until, kind: 'STANDARD', planId: null },
     });
   });
 
@@ -113,12 +115,12 @@ describe('planMutation: the transition table', () => {
     expect(planMutation(active, 'SUSPEND', NOW)).toEqual({
       kind: 'write',
       action: 'SUSPEND',
-      next: { status: 'SUSPENDED', startsAt: active.startsAt, expiresAt: active.expiresAt },
+      next: { status: 'SUSPENDED', startsAt: active.startsAt, expiresAt: active.expiresAt, kind: 'STANDARD', planId: null },
     });
     expect(planMutation(suspended, 'RESTORE', NOW)).toEqual({
       kind: 'write',
       action: 'RESTORE',
-      next: { status: 'ACTIVE', startsAt: active.startsAt, expiresAt: active.expiresAt },
+      next: { status: 'ACTIVE', startsAt: active.startsAt, expiresAt: active.expiresAt, kind: 'STANDARD', planId: null },
     });
   });
 
@@ -274,15 +276,16 @@ describe('AccessControl', () => {
     await expect(new AccessControl(store, 'open').decide('usr-00000001')).resolves.toEqual({
       allowed: true,
       via: 'open',
+      plan: null,
+      sessionLimit: undefined,
     });
   });
 
   it('fails closed when the store cannot be read under the entitlement policy', async () => {
-    const store = {
-      get: async () => {
-        throw new Error('connect ECONNREFUSED');
-      },
-    } as unknown as InMemoryAccessStore;
+    const failing = async () => {
+      throw new Error('connect ECONNREFUSED');
+    };
+    const store = { get: failing, grants: failing } as unknown as InMemoryAccessStore;
     await expect(new AccessControl(store, 'entitlement').decide('usr-00000001')).rejects.toThrow(/ECONNREFUSED/);
   });
 });

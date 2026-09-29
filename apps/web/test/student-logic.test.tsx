@@ -123,6 +123,32 @@ describe('what an API error means to a student', () => {
     expect(describeError({ code: 'ACCESS_NOT_ACTIVE', message: 'x' }, 'launch').title).toBe(
       'Your account does not have lab access yet',
     );
+
+    // Plans (docs/commercial-access.md §10): active access that does not cover
+    // this lab says so, names the track, and never blames payment or the platform.
+    for (const context of ['launch', 'terminal', 'verify'] as const) {
+      const outside = describeError(
+        { code: 'LAB_NOT_IN_PLAN', message: 'x', details: { track: 'kubernetes', planId: 'fixture' } },
+        context,
+      );
+      expect(outside, context).toMatchObject({
+        kind: 'access',
+        title: 'This lab is not included in your plan',
+        reference: 'LAB_NOT_IN_PLAN',
+        retryable: false,
+      });
+      expect(outside.message).toContain('the kubernetes track');
+      expect(`${outside.message} ${outside.guidance}`).not.toMatch(/platform problem|payment|expired/i);
+    }
+    // A track id that is not a plain slug is not echoed.
+    expect(
+      describeError({ code: 'LAB_NOT_IN_PLAN', message: 'x', details: { track: '<img src=x>' } }, 'launch').message,
+    ).toContain('this track');
+    expect(describeError({ code: 'ACCESS_PLAN_UNAVAILABLE', message: 'x' }, 'launch')).toMatchObject({
+      kind: 'access',
+      title: 'Your lab access could not be confirmed',
+      retryable: false,
+    });
   });
 
   it('words an unreachable environment for the action that failed', () => {
