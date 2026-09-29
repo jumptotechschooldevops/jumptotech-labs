@@ -59,7 +59,8 @@ services:
       # service_healthy` now means what it says.
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:9400/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 15s
-      timeout: 5s
+      # The probe boots its own node process: seconds on a loaded host.
+      timeout: 10s
       retries: 5
       # Long on purpose, as in api.Dockerfile: the api transpiles at start and
       # took 225 s on a loaded host. web and terminal wait for this to be
@@ -78,7 +79,8 @@ services:
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:9401/livez').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 15s
-      timeout: 5s
+      # The probe boots its own node process: seconds on a loaded host.
+      timeout: 10s
       retries: 5
       # As the api's: TypeScript is compiled at start (api.Dockerfile).
       start_period: 300s
