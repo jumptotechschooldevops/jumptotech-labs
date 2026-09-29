@@ -50,6 +50,24 @@ describe('before launch', () => {
     expect(screen.getByText('2 hints are available once the lab is running.')).toBeTruthy();
   });
 
+  it('states the environment\u2019s real deadlines, and warns when the estimate is close to them', async () => {
+    const withLimits = { ...sessionsResponse([], 1), limits: { maxActiveSessionsPerStudent: 1, maxSessionMinutes: 60, idleTimeoutMinutes: 20 } };
+    apiMock.listMySessions.mockResolvedValue(withLimits);
+    await renderDetail();
+    expect(await screen.findByText(/after 20 min without activity, or 1 h after it starts/)).toBeTruthy();
+    expect(screen.getByText('The estimated time of 20 min is a guide.')).toBeTruthy();
+    // It used to add "not a deadline" — for labs estimated at the full hour.
+    expect(screen.queryByText(/not a deadline/)).toBeNull();
+  });
+
+  it('warns that a lab estimated near the time limit should be verified as the student goes', async () => {
+    const withLimits = { ...sessionsResponse([], 1), limits: { maxActiveSessionsPerStudent: 1, maxSessionMinutes: 60, idleTimeoutMinutes: 20 } };
+    apiMock.listMySessions.mockResolvedValue(withLimits);
+    apiMock.getLab.mockResolvedValue(labDetail({ durationMinutes: 55 }));
+    await renderDetail();
+    expect(await screen.findByText(/usually takes about 55 min, close to the 1 h limit\. Press Verify as you go/)).toBeTruthy();
+  });
+
   it('renders backticked commands in the task as code', async () => {
     await renderDetail();
     const code = screen.getAllByText('project', { selector: 'code' });
