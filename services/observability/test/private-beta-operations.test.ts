@@ -361,6 +361,17 @@ describe('monitoring joins production without becoming reachable', () => {
     expect(read('infrastructure/observability/alertmanager/secrets/.gitignore').split('\n')).toContain('*');
   });
 
+  it('pages once for one set of failed starts, not once per threshold', () => {
+    // 2026-09-28 drill: three provision failures sent LabStartsFailingHard and
+    // then LabStartFailureRateElevated. Their names differ, so the generic
+    // critical-over-warning rule (equal: alertname, service) cannot pair them.
+    const alertmanager = withoutComments(read('infrastructure/observability/alertmanager/alertmanager.yml'));
+    const inhibit = alertmanager.slice(alertmanager.indexOf('inhibit_rules:'));
+    expect(inhibit).toMatch(
+      /- source_matchers: \[alertname="LabStartsFailingHard"\]\n\s+target_matchers: \[alertname="LabStartFailureRateElevated"\]\n(?!\s+equal:)/,
+    );
+  });
+
   it('sends the always-firing Watchdog only to the heartbeat receiver, ahead of every other route', () => {
     // A dead host sends nothing; only an external service that notices the
     // heartbeat stop can report it (RB-20). The Watchdog must never page a

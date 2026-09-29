@@ -134,6 +134,13 @@ inhibit_rules:
   - source_matchers: [alertname="TlsCertificateExpiresWithin7Days"]
     target_matchers: [alertname=~"TlsEdgeUnhealthy|TlsCertificateRenewalDue"]
     equal: ['instance']
+  # The same failed starts cross both thresholds: measured in the 2026-09-28
+  # drill, three provision failures paged LabStartsFailingHard and, two minutes
+  # later, LabStartFailureRateElevated. Different names, so the critical-beats-
+  # warning rule below does not match them. No `equal`: neither carries a
+  # service or instance label (they are platform-wide sums).
+  - source_matchers: [alertname="LabStartsFailingHard"]
+    target_matchers: [alertname="LabStartFailureRateElevated"]
   - source_matchers: [alertname="HostMemoryCritical"]
     target_matchers: [alertname="HostMemoryPressure"]
     equal: ['instance']
