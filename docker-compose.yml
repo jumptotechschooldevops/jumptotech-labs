@@ -122,13 +122,20 @@ services:
       # ready +58.5 s, gone +61.5 s, TCP ready +64.7 s), and the runbook's
       # restore onto a new volume failed in it. Only the real server listens
       # on TCP (scripts/db-lib.sh jtt_wait_ready, scripts/wait-for-postgres.mjs).
+      #
+      # start_period covers that first boot. TCP came up at +64.7 s and again
+      # at +63 s on a loaded host, and 10 s + 12 × 5 s marked the container
+      # unhealthy at 70 s, so a slightly slower first boot stopped the api from
+      # starting. A passing check still reports healthy at once; the start
+      # period only delays when failures begin to count. The production
+      # contract holds it (durability.database-first-boot, ≥ 180 s).
       test:
         - CMD-SHELL
         - pg_isready -h 127.0.0.1 -p 5432 -U "${POSTGRES_USER:-jumptotech}" -d "${POSTGRES_DB:-jumptotech_labs}"
       interval: 5s
       timeout: 3s
       retries: 12
-      start_period: 10s
+      start_period: 180s
     networks:
       # The api's network and nothing else. See the header.
       - database
