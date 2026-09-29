@@ -73,6 +73,17 @@ export const SANDBOX_IMAGE_VARIABLES = Object.freeze([
 export const PRODUCTION_RESTART_POLICY = 'unless-stopped';
 
 /**
+ * How long PostgreSQL's health check must tolerate "not ready" on a new
+ * volume (start_period + interval × retries). The image initialises the
+ * volume with a temporary socket-only server first; the real server reached
+ * TCP at +64.7 s (2026-09-28) and +63 s (2026-09-29) on a loaded host,
+ * against a window of 70 s. A restore onto a new volume that runs past the
+ * window marks postgres unhealthy, and `depends_on: service_healthy` stops the
+ * api from starting at all.
+ */
+export const DATABASE_FIRST_BOOT_WINDOW_SECONDS = 180;
+
+/**
  * The host names the web edge's certificate gate accepts from PUBLIC_ORIGIN
  * (infrastructure/docker/nginx/tls-preflight.sh, `public_host`): lower-case DNS
  * labels, at least two of them, the last starting with a letter — so no IP
@@ -122,7 +133,13 @@ export interface ResolvedService {
   restart?: string;
   stop_grace_period?: string;
   logging?: { driver?: string; options?: Record<string, string> };
-  healthcheck?: { test?: string[] | string; disable?: boolean };
+  healthcheck?: {
+    test?: string[] | string;
+    disable?: boolean;
+    interval?: string;
+    retries?: number;
+    start_period?: string;
+  };
   command?: string[] | string;
   group_add?: Array<string | number>;
 }
@@ -554,6 +571,44 @@ export function evaluateProductionComposition(config: ResolvedCompose, options: 
           ? [`postgres stop_grace_period is ${grace ?? 'the 10 s default'}: its final checkpoint can be cut short by SIGKILL`]
           : [],
       `postgres is given ${graceSeconds} s to shut down cleanly`,
+    ),
+  );
+
+  // A new volume (a fresh host, a restore): the image's initialiser runs a
+  // socket-only server first, so the check must dial TCP, and it must wait
+  // out the initialiser before it counts failures. Docker's defaults apply to
+  // whatever compose leaves unset: interval 30 s, retries 3, no start period.
+  const dbCheck = services.postgres?.healthcheck;
+  const firstBoot: string[] = [];
+  let firstBootWindow: number | undefined;
+  if (!dbCheck || dbCheck.disable === true) {
+    firstBoot.push('postgres has no health check (durability.healthchecks)');
+  } else {
+    const text = Array.isArray(dbCheck.test) ? dbCheck.test.join(' ') : dbCheck.test ?? '';
+    if (!text.includes('-h 127.0.0.1')) {
+      firstBoot.push(
+        "postgres health check does not dial TCP (pg_isready -h 127.0.0.1): the image initialiser's socket-only server passes it before the real server is up",
+      );
+    }
+    const start = dbCheck.start_period === undefined ? 0 : composeDurationSeconds(dbCheck.start_period);
+    const interval = dbCheck.interval === undefined ? 30 : composeDurationSeconds(dbCheck.interval);
+    const retries = dbCheck.retries ?? 3;
+    if (start === undefined || interval === undefined || !Number.isInteger(retries) || retries < 1) {
+      firstBoot.push('postgres health check timings are not durations this check can read');
+    } else {
+      firstBootWindow = start + interval * retries;
+      if (firstBootWindow < DATABASE_FIRST_BOOT_WINDOW_SECONDS) {
+        firstBoot.push(
+          `postgres is marked unhealthy ${firstBootWindow} s after it starts (start_period + interval × retries); a first boot on a new volume can take longer, and the api then never starts — allow at least ${DATABASE_FIRST_BOOT_WINDOW_SECONDS} s`,
+        );
+      }
+    }
+  }
+  results.push(
+    one(
+      'durability.database-first-boot',
+      firstBoot,
+      `postgres health check dials TCP and allows ${firstBootWindow} s for a first boot`,
     ),
   );
 

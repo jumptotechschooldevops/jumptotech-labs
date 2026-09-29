@@ -105,6 +105,14 @@ case $sql in
     done
     ;;
   *query_to_xml*) printf 'schema_migrations 5\nstudents 3\n' ;;
+  # The shell uid sequence: the live database's, and the restored archive's.
+  *'FROM pg_sequences'*)
+    case $database in
+      *_restore_*) printf '%s\n' "${FAKE_SHELL_UID_ARCHIVE-}" ;;
+      *) printf '%s\n' "${FAKE_SHELL_UID_LIVE-}" ;;
+    esac
+    ;;
+  *setval*) [ -z "${FAKE_SETVAL_FAIL-}" ] || exit 3 ;;
   *)
     echo "fake psql: unexpected statement: $sql" >&2
     exit 3
@@ -233,6 +241,7 @@ new_case() {
     FAKE_CREATE_FAIL FAKE_SWAP_FAIL FAKE_PG_DUMP_FAIL FAKE_PG_DUMP_GARBAGE \
     FAKE_PG_STARTING FAKE_PG_INITIALISING JTT_DB_READY_TIMEOUT_SECONDS \
     FAKE_TOC_NO_MIGRATIONS FAKE_PG_RESTORE_FAIL FAKE_CONTAINER_SHA_WRONG FAKE_ARCHIVE_TRUNCATED FAKE_LEDGER_READ_FAIL FAKE_LEDGER_NEWER \
+    FAKE_SHELL_UID_LIVE FAKE_SHELL_UID_ARCHIVE FAKE_SETVAL_FAIL \
     BACKUP_ACCEPT_NEW_DATABASE \
     BACKUP_LABEL BACKUP_RETENTION_DAYS BACKUP_RETENTION_MIN_KEEP BACKUP_COPY_HOOK
 }
@@ -748,6 +757,60 @@ given_archive
 export FAKE_SWAP_FAIL=1
 restore --replace jumptotech_labs --confirm jumptotech_labs "$case_dir/a.dump"
 expect '--replace when the rename fails: reports the rollback' says 'rolled back'
+
+# SEC-ARCH-2: a shell uid is handed out once, ever. The archive's uid sequence
+# stands where it was at the backup; the database being replaced has handed out
+# every uid since, to shells that may still be running in the terminal. The
+# restored database must carry on after the higher of the two, before the swap.
+carried_before_swap() {
+  local carry begin
+  carry=$(grep -n "^psql jumptotech_labs_restore_[0-9]\{14\}: SELECT setval('lab_session_shell_uid_seq', $1, true)$" "$FAKE_LOG" | head -1 | cut -d: -f1)
+  begin=$(grep -n '^psql postgres: BEGIN$' "$FAKE_LOG" | head -1 | cut -d: -f1)
+  [ -n "$carry" ] && [ -n "$begin" ] && [ "$carry" -lt "$begin" ]
+}
+not_carried() { ! grep -q setval "$FAKE_LOG"; }
+
+new_case
+given_archive
+export FAKE_SHELL_UID_LIVE=1900000500 FAKE_SHELL_UID_ARCHIVE=1900000011
+restore --replace jumptotech_labs --confirm jumptotech_labs "$case_dir/a.dump"
+expect '--replace over a database that handed out uids since the archive: succeeds' succeeded
+expect '--replace: the restored uid sequence carries on after the live one, before the swap' carried_before_swap 1900000500
+expect '--replace: says the uid sequence was carried forward' says 'continues after 1900000500'
+
+new_case
+given_archive
+export FAKE_SHELL_UID_LIVE=1900000500 FAKE_SHELL_UID_ARCHIVE=unused
+restore --replace jumptotech_labs --confirm jumptotech_labs "$case_dir/a.dump"
+expect '--replace from an archive that had handed out no uid: carries the live sequence' carried_before_swap 1900000500
+
+new_case
+given_archive
+export FAKE_SHELL_UID_LIVE=1900000005 FAKE_SHELL_UID_ARCHIVE=1900000011
+restore --replace jumptotech_labs --confirm jumptotech_labs "$case_dir/a.dump"
+expect '--replace from an archive ahead of the live sequence: succeeds' succeeded
+expect '--replace from an archive ahead of the live sequence: keeps the archive position' not_carried
+
+new_case
+given_archive
+export FAKE_SHELL_UID_LIVE=unused FAKE_SHELL_UID_ARCHIVE=1900000011
+restore --replace jumptotech_labs --confirm jumptotech_labs "$case_dir/a.dump"
+expect '--replace over a re-created database that handed out nothing: keeps the archive position' not_carried
+
+new_case
+given_archive
+export FAKE_SHELL_UID_LIVE=1900000500 FAKE_SHELL_UID_ARCHIVE=
+restore --replace jumptotech_labs --confirm jumptotech_labs "$case_dir/a.dump"
+expect '--replace from an archive older than migration 007: succeeds' succeeded
+expect '--replace from an archive older than migration 007: says to restart the terminal' says 'Restart the terminal'
+expect '--replace from an archive older than migration 007: nothing to carry' not_carried
+
+new_case
+given_archive
+export FAKE_SHELL_UID_LIVE=1900000500 FAKE_SHELL_UID_ARCHIVE=1900000011 FAKE_SETVAL_FAIL=1
+restore --replace jumptotech_labs --confirm jumptotech_labs "$case_dir/a.dump"
+expect '--replace when the uid sequence cannot be carried: exits non-zero, target untouched' says 'jumptotech_labs is untouched'
+expect '--replace when the uid sequence cannot be carried: no rename is attempted' bash -c "! grep -q 'ALTER DATABASE' '$FAKE_LOG'"
 
 # --- monitoring status (BETA-P0-018) ---------------------------------------------------
 #

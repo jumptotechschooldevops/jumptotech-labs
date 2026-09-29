@@ -24,6 +24,9 @@
 #                      staging   ->  DATABASE
 #                  Nothing is dropped. The previous database stays until an
 #                  operator removes it by hand, so the swap can be reversed.
+#                  The one value not taken from the archive: the session shell
+#                  uid sequence carries on after the last uid DATABASE handed
+#                  out, so no uid goes to a second session (SEC-ARCH-2).
 #                  Confirm by typing DATABASE at the prompt, or pass
 #                  --confirm DATABASE when there is no terminal.
 #
@@ -288,6 +291,37 @@ if ! restore_into "$staging"; then
 fi
 check_restored "$staging"
 
+# SEC-ARCH-2 (migration 007): a session's shell uid is handed out once, ever,
+# so nothing a shell left in the terminal container — a file, a process that
+# escaped its teardown — passes to another student. The archive holds the uid
+# sequence where it stood at the backup; the database being replaced has
+# handed out every uid since. Restored as archived, those uids would go to new
+# sessions again, while the shells that held them may still be running. So the
+# restored sequence carries on after the higher of the two. Nothing is lost:
+# a uid is a number, not data.
+#   empty   — no such sequence (a database from before migration 007)
+#   unused  — the sequence exists and has handed out nothing
+#   N       — the last uid handed out
+shell_uid_position() {
+  local value
+  value=$(jtt_psql "$1" -c "SELECT coalesce(last_value::text, 'unused') FROM pg_sequences WHERE schemaname = 'public' AND sequencename = 'lab_session_shell_uid_seq'") \
+    || return 1
+  [[ $value =~ ^([0-9]+|unused)?$ ]] || return 1
+  printf '%s' "$value"
+}
+live_uid=$(shell_uid_position "$target") \
+  || jtt_die "cannot read the shell uid sequence of $target. $target is untouched; the restored copy is in $staging."
+restored_uid=$(shell_uid_position "$staging") \
+  || jtt_die "cannot read the shell uid sequence of $staging. $target is untouched; the restored copy is in $staging."
+[ "$live_uid" != unused ] || live_uid=
+if [ -n "$live_uid" ] && [ -z "$restored_uid" ]; then
+  jtt_log "WARNING: $target has handed out shell uids up to $live_uid, and the archive predates migration 007, which records them. Restart the terminal (it clears every shell and file of an earlier session) before students start labs."
+elif [ -n "$live_uid" ] && { [ "$restored_uid" = unused ] || [ "$live_uid" -gt "$restored_uid" ]; }; then
+  jtt_psql "$staging" -c "SELECT setval('lab_session_shell_uid_seq', $live_uid, true)" >/dev/null \
+    || jtt_die "could not carry the shell uid sequence into $staging. $target is untouched; the restored copy is in $staging."
+  jtt_log "shell uids: the archive stood at ${restored_uid/unused/none handed out}; $target had handed out up to ${live_uid}. The restored database continues after $live_uid, so no uid is given twice."
+fi
+
 connected=$(sessions_on "$target") || jtt_die "cannot list sessions on $target"
 if [ "$connected" != 0 ]; then
   jtt_die "a session connected to $target during the restore. $target is untouched; the restored copy is in $staging."
@@ -313,15 +347,18 @@ fi
 cat >&2 <<EOF
 
 Next:
-  1. Start the api. With DATABASE_AUTO_MIGRATE=true it applies any pending
+  1. If the terminal kept running, restart it (docker compose restart
+     terminal): that drops every shell and file of sessions the archive does
+     not know about.
+  2. Start the api. With DATABASE_AUTO_MIGRATE=true it applies any pending
      migration at startup; otherwise run npm run db:migrate.
-  2. Validate the application (docs/runbooks/postgres-backup-restore.md, "Validate").
-  3. To undo the swap, stop the api and run:
+  3. Validate the application (docs/runbooks/postgres-backup-restore.md, "Validate").
+  4. To undo the swap, stop the api and run:
        docker exec -u postgres $JTT_CONTAINER psql -X -v ON_ERROR_STOP=1 -U $JTT_ROLE -d postgres \\
          -c 'BEGIN' \\
          -c 'ALTER DATABASE $target RENAME TO ${target}_failed_$stamp' \\
          -c 'ALTER DATABASE $retained RENAME TO $target' \\
          -c 'COMMIT'
-  4. Once the restore is accepted, remove $retained by hand (see the runbook).
+  5. Once the restore is accepted, remove $retained by hand (see the runbook).
 
 EOF

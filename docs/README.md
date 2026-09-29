@@ -144,6 +144,7 @@ Dated; not maintained after their pass. Newest first within each group.
 
 | Record | Date |
 |---|---|
+| [releases/overnight-final-validation-2026-09-29.md](releases/overnight-final-validation-2026-09-29.md) | 2026-09-29 |
 | [releases/observability-incident-audit-2026-09-28.md](releases/observability-incident-audit-2026-09-28.md) | 2026-09-28 |
 | [releases/student-experience-audit-2026-09-28.md](releases/student-experience-audit-2026-09-28.md) | 2026-09-28 |
 | [releases/auth-identity-audit-2026-09-28.md](releases/auth-identity-audit-2026-09-28.md) | 2026-09-28 |

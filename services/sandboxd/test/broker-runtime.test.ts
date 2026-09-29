@@ -19,6 +19,7 @@ import {
   type ContainerInfo,
   type ContainerRuntimePort,
 } from '@jumptotech/lab-orchestrator';
+import { createLogger, withContext } from '@jumptotech/observability';
 import { defaultObservabilityConfig, type SandboxdConfig } from '../src/config.js';
 import { createSandboxd } from '../src/server.js';
 
@@ -158,5 +159,44 @@ describe('BrokerRuntime round trip', () => {
       timeoutMs: 2_000,
     });
     await expect(client.ping()).rejects.toThrow(/unreachable/);
+  });
+});
+
+describe('a runtime refusal leaves a line, not only a count', () => {
+  /*
+   * 2026-09-28 observability drill: Docker ran out of address pools, three
+   * students' starts failed, and sandboxd — which returned the daemon's words
+   * to the api as a 400 — logged nothing. The api's session line had the
+   * reason; the broker that talked to the daemon had no record at all.
+   */
+  it('logs the refused op, its code and the daemon error, under the request id', async () => {
+    const fake = inMemoryRuntime();
+    fake.runtime.networkCreate = async () => {
+      throw new ContainerRuntimeError('Error response from daemon: all predefined address pools have been fully subnetted');
+    };
+    const lines: string[] = [];
+    const server = createSandboxd({
+      config,
+      inspector: { inspect: async () => null },
+      runtime: fake.runtime,
+      logger: createLogger({ service: 'sandboxd', level: 'debug', sink: (line) => lines.push(line) }),
+      log: () => undefined,
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as AddressInfo;
+
+    const client = new BrokerRuntime({ baseUrl: `http://127.0.0.1:${port}`, secret: SECRET + '-runtime' });
+    await expect(
+      withContext({ requestId: 'drill-req-1' }, () =>
+        client.networkCreate({ name: 'jtt-net-aabbccdd1122', internal: true, labels: {} } as never),
+      ),
+    ).rejects.toThrow(/address pools/);
+
+    const refused = lines
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .find((line) => line.event === 'sandbox.runtime.op' && line.outcome === 'refused');
+    expect(refused).toMatchObject({ level: 'warn', op: 'networkCreate', status: 400, code: 'CONTAINER_RUNTIME_ERROR', requestId: 'drill-req-1' });
+    expect(JSON.stringify(refused!.err)).toContain('address pools');
   });
 });

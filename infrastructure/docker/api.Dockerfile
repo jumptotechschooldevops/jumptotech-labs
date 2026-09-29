@@ -101,8 +101,16 @@ EXPOSE 4000
 # marks the container healthy, so a long period costs a healthy start nothing.
 # A short one declared a slow start unhealthy, which made `up --wait` fail and
 # `depends_on: service_healthy` refuse to start web and terminal.
-HEALTHCHECK --interval=10s --timeout=3s --start-period=300s --retries=5 \
-  CMD node -e "fetch('http://127.0.0.1:'+(process.env.API_PORT||4000)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+#
+# `/readyz` on the observability listener, not `/health` on the api port: the
+# same check the observability and production overlays run, answered from
+# cached probes (catalogue loaded, database reachable). `/health` reads the
+# database and every provider live — 0.1–14 s measured at load 20–40 in the
+# 2026-09-28 observability drill — so a serving api was declared unhealthy and
+# web and terminal were never created. The 10 s timeout also covers booting the
+# `node -e` probe itself, which is seconds on a loaded host.
+HEALTHCHECK --interval=15s --timeout=10s --start-period=300s --retries=5 \
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.OBSERVABILITY_PORT||9400)+'/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 # One process: `node --import tsx`, neither `npx tsx` nor `node …/.bin/tsx`.
 # Under `npx` the process that receives SIGTERM is npm, which exits without

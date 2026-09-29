@@ -123,7 +123,17 @@ function knownSeries(): Set<string> {
   // Series the platform does not register: Prometheus's own `up`, and what
   // Alertmanager exports about delivery (prometheus.yml job `alertmanager`;
   // present at zero from startup in prom/alertmanager:v0.27.0, measured).
-  const names = new Set<string>(['up', 'alertmanager_notifications_failed_total']);
+  //
+  // And the default metrics prom-client registers only on Linux — every
+  // container this platform runs in, where they are scraped (measured on the
+  // 2026-09-28 drill stack) — so this list does not depend on the machine the
+  // suite runs on.
+  const names = new Set<string>([
+    'up',
+    'alertmanager_notifications_failed_total',
+    'jtt_process_open_fds',
+    'jtt_process_max_fds',
+  ]);
   for (const metric of registry.getMetricsAsArray()) {
     names.add(metric.name);
     names.add(`${metric.name}_bucket`);

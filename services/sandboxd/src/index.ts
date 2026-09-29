@@ -28,6 +28,7 @@ import { distinctContainerSessions, ownedContainers } from './container-accounti
 import { DockerOps } from './docker-ops.js';
 import { loadSandboxdConfig } from './config.js';
 import { DockerSandboxInspector } from './inspector.js';
+import { applyKeepAlivePolicy } from './keep-alive.js';
 import { createSandboxd } from './server.js';
 
 const config = loadSandboxdConfig();
@@ -98,6 +99,16 @@ const docker = config.docker
       derivationSecret: config.derivationSecret,
       runtimeOwner: config.runtimeOwner,
       policy: config.docker,
+      // The one moment a sandbox's data volume can be seen leaking: nothing
+      // retries its removal (RB-05).
+      onVolumeLeak: ({ sessionId, sandboxRef, volume, error }) => {
+        metrics.dockerOps.inc({ op: 'removeSandbox', outcome: 'volume_leaked' });
+        logger.warn(
+          'sandbox.remove.failed',
+          { op: 'removeSandbox', sessionId, sandboxRef, outcome: 'volume_leaked', err: error },
+          `data volume ${volume} was not removed and will not be retried`,
+        );
+      },
     })
   : undefined;
 
@@ -110,6 +121,8 @@ const server = createSandboxd({
   common,
   ...(docker ? { docker } : {}),
 });
+// An idle keep-alive socket outlives the client's use of it (keep-alive.ts).
+applyKeepAlivePolicy(server);
 
 /**
  * The last runtime probe, shared by `/readyz` and `jtt_sandboxd_runtime_up`.

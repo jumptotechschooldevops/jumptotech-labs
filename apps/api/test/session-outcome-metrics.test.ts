@@ -118,7 +118,7 @@ function compose() {
       .reduce((sum, v) => sum + v.value, 0);
   };
 
-  return { app, lines, counter, store };
+  return { app, lines, counter, store, provider, sessions };
 }
 
 const as = (student: string) => ({ Authorization: `Developer ${student}` });
@@ -169,6 +169,54 @@ describe('Reset Lab and End Lab outcomes', () => {
     for (const name of ['jtt_lab_reset_outcome_total', 'jtt_lab_end_outcome_total']) {
       expect(await counter(name), name).toBe(0);
     }
+  });
+});
+
+describe('failure lines name the session', () => {
+  /*
+   * The student reads out a Support ID (`sess-…`); the operator greps for it.
+   * A thrown Reset or End failure, and a Start that broke after admission,
+   * logged a bare `code` and no session, lab or duration, so the one line that
+   * said *why* could not be found by the only id the student has.
+   */
+  it('puts sessionId and labId on lab.start.failed, lab.reset.failed and lab.end.failed', async () => {
+    const { app, lines, provider, sessions } = compose();
+    const started = await request(app).post('/api/labs/K8S-001/start').set(as('alice'));
+    const sessionId = started.body.data.session.sessionId as string;
+
+    // End throwing — the session store gone mid-teardown — is its catch path.
+    const end = sessions.end.bind(sessions);
+    sessions.end = async () => {
+      throw Object.assign(new Error('connect ECONNREFUSED 172.18.0.2:5432'), { code: 'ECONNREFUSED' });
+    };
+    expect((await request(app).delete(`/api/sessions/${sessionId}`).set(as('alice'))).status).toBe(500);
+    sessions.end = end;
+    expect((await request(app).delete(`/api/sessions/${sessionId}`).set(as('alice'))).status).toBe(200);
+
+    // A refusal after the session is over: the catch path of Reset.
+    await request(app).post(`/api/sessions/${sessionId}/reset`).set(as('alice'));
+    const parsed = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+    const reset = parsed.find((line) => line.event === 'lab.reset.failed');
+    expect(reset).toMatchObject({ sessionId, labId: 'K8S-001', outcome: 'rejected', code: 'SESSION_NOT_ACTIVE' });
+    expect(typeof reset!.durationMs).toBe('number');
+    const ended = parsed.find((line) => line.event === 'lab.end.failed');
+    expect(ended).toMatchObject({ sessionId, labId: 'K8S-001', provider: 'kubernetes', outcome: 'failed' });
+    expect(typeof ended!.durationMs).toBe('number');
+    // The cause reaches the operator's line, through the redactor.
+    expect(ended!.err).toMatchObject({ code: 'ECONNREFUSED' });
+
+    // A start admitted, then broken by the provider.
+    provider.create = async () => {
+      throw new Error('admission webhook denied the namespace');
+    };
+    const broken = await request(app).post('/api/labs/K8S-001/start').set(as('alice'));
+    expect(broken.status).toBeGreaterThanOrEqual(400);
+    const failed = lines
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .find((line) => line.event === 'lab.start.failed');
+    expect(failed).toMatchObject({ labId: 'K8S-001' });
+    expect(failed!.sessionId).toMatch(/^sess-/);
+    expect(failed!.sessionId).not.toBe(sessionId);
   });
 });
 

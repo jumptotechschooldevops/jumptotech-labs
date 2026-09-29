@@ -242,9 +242,10 @@ describe('the private-beta alert set', () => {
     // alert-delivery alerts (platform.yml); 63 with the disaster-recovery
     // audit's DatabaseRecreatedSinceLastBackup (database.yml); 64 with the
     // reliability audit's IdentityProviderUnreachable (security.yml), without
-    // which nothing fired while nobody could sign in. Adding alerts is fine;
-    // do it on purpose.
-    expect(ALERTS.length).toBeLessThanOrEqual(64);
+    // which nothing fired while nobody could sign in; 65 with the
+    // observability audit's ProcessFileDescriptorsHigh (api.yml), the one
+    // saturation signal with no alert. Adding alerts is fine; do it on purpose.
+    expect(ALERTS.length).toBeLessThanOrEqual(65);
   });
 });
 
@@ -359,6 +360,36 @@ describe('monitoring joins production without becoming reachable', () => {
     expect(alertmanager).toContain('url_file: /etc/alertmanager/secrets/webhook-url');
     expect(alertmanager).not.toMatch(/^\s*-?\s*url:/m);
     expect(read('infrastructure/observability/alertmanager/secrets/.gitignore').split('\n')).toContain('*');
+  });
+
+  it('pages once for one set of failed starts, not once per threshold', () => {
+    // 2026-09-28 drill: three provision failures sent LabStartsFailingHard and
+    // then LabStartFailureRateElevated. Their names differ, so the generic
+    // critical-over-warning rule (equal: alertname, service) cannot pair them.
+    const alertmanager = withoutComments(read('infrastructure/observability/alertmanager/alertmanager.yml'));
+    const inhibit = alertmanager.slice(alertmanager.indexOf('inhibit_rules:'));
+    expect(inhibit).toMatch(
+      /- source_matchers: \[alertname="LabStartsFailingHard"\]\n\s+target_matchers: \[alertname="LabStartFailureRateElevated"\]\n(?!\s+equal:)/,
+    );
+  });
+
+  it('lets a database outage page as the database, not also as a stalled reaper or a slow api', () => {
+    // 2026-09-28 drill: PostgreSQL stopped -> DatabaseDown, ReaperStalled and
+    // ApiLatencyHigh together. The sweep lists sessions from the database.
+    const alertmanager = withoutComments(read('infrastructure/observability/alertmanager/alertmanager.yml'));
+    const targets = [...alertmanager.matchAll(/- source_matchers: \[alertname="DatabaseDown"\]\n\s+target_matchers:\n\s+- alertname=~"([^"]+)"/g)]
+      .flatMap((m) => m[1]!.split('|'));
+    expect(targets).toContain('ReaperStalled');
+    expect(targets).toContain('ApiLatencyHigh');
+  });
+
+  it('lets a hung broker page as the broker, not also as a stalled reaper', () => {
+    // 2026-09-28 drill: sandboxd paused -> ServiceDown{sandboxd} and then
+    // ReaperStalled, both critical. The sweep lists sandboxes through the broker.
+    const alertmanager = withoutComments(read('infrastructure/observability/alertmanager/alertmanager.yml'));
+    const rule = /- source_matchers: \[alertname=~"SandboxdRuntimeDown\|ServiceDown", job=~"sandboxd\|"\]\n\s+target_matchers:\n\s+- alertname=~"([^"]+)"/.exec(alertmanager);
+    expect(rule, 'the broker-outage inhibit rule').not.toBeNull();
+    expect(rule![1]!.split('|')).toContain('ReaperStalled');
   });
 
   it('sends the always-firing Watchdog only to the heartbeat receiver, ahead of every other route', () => {
