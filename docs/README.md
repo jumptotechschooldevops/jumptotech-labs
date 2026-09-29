@@ -73,6 +73,7 @@ fails the build for one that does not:
 | a new host: prerequisites, preflight, deployment, smoke, upgrade, rollback | [development/production-host-readiness.md](development/production-host-readiness.md) |
 | the private beta on one host, in order: sizing, external setup, secrets, commands, validation, go-live checklist, stop conditions | [runbooks/private-beta-deployment.md](runbooks/private-beta-deployment.md) |
 | running the beta day to day; `prod` and the helpers | [runbooks/private-beta-operations.md](runbooks/private-beta-operations.md) |
+| adding, removing and protecting student accounts: sign-in, access, sign-out, a stolen session, emergency revoke | [runbooks/identity-and-access.md](runbooks/identity-and-access.md) |
 | teaching a class: the classroom view, what to check when a student is stuck, P0–P3, when to escalate | [runbooks/instructor-guide.md](runbooks/instructor-guide.md) |
 | incidents A–U, by what you see | [runbooks/private-beta-incident-response.md](runbooks/private-beta-incident-response.md) |
 | what fails, what students see, what recovers by itself: failure domains, journeys, failure matrix, measured RPO/RTO, restart order, retention | [reliability-failure-model.md](reliability-failure-model.md) |
@@ -143,6 +144,7 @@ Dated; not maintained after their pass. Newest first within each group.
 | Record | Date |
 |---|---|
 | [releases/student-experience-audit-2026-09-28.md](releases/student-experience-audit-2026-09-28.md) | 2026-09-28 |
+| [releases/auth-identity-audit-2026-09-28.md](releases/auth-identity-audit-2026-09-28.md) | 2026-09-28 |
 | [releases/lab-certification-2026-09-27.md](releases/lab-certification-2026-09-27.md) | 2026-09-27 |
 | [security/redteam-wave2-2026-09-27.md](security/redteam-wave2-2026-09-27.md) | 2026-09-27 |
 | [security/redteam-audit-2026-09-27.md](security/redteam-audit-2026-09-27.md) | 2026-09-27 |

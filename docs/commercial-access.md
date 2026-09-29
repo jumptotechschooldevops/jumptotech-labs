@@ -496,7 +496,7 @@ for accounting, and how it interacts with backups — is an operator decision
 | **Manual vs paid grant precedence** | Separate rows; the operator's non-trial row answers when both are active ([billing.md §6](billing.md#6-subscriptions-and-manual-grants-together)) |
 | **Account deletion / anonymisation, and retention** of users, progress, access history and backups | Everything is kept indefinitely; backups follow `BACKUP_RETENTION_DAYS` |
 | **Showing the access window to students** (e.g. "access until 31 Dec") | `GET /api/me/access` returns it; the page shows the state only |
-| **Sign out everywhere** when an account is compromised (`destroyAllForUser` exists, nothing calls it) | Not available to operators |
+| **Sign out everywhere** when an account is compromised | Available: `ops sign-out <user-id>` ([identity-and-access.md §8](runbooks/identity-and-access.md#8-suspected-stolen-session-cookie-laptop-shared-machine)); not automatic on suspend or revoke |
 
 ## 13. Known limits
 
