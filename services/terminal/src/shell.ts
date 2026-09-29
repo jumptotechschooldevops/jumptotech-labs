@@ -108,7 +108,16 @@ export function localShell(
   return {
     write: (data) => term.write(data),
     resize: (cols, rows) => term.resize(cols, rows),
-    kill: () => term.kill(),
+    /*
+     * Close the PTY, not just signal the shell. With a uid per session
+     * (SEC-ARCH-2) the shell is not this process's uid and this process holds
+     * no CAP_KILL, so node-pty's `kill()` — a SIGHUP it sends itself, its
+     * EPERM swallowed — reached nothing, and every reload or reconnect left
+     * the old bash and its foreground job running until End. Closing the
+     * master is the terminal hangup: the kernel signals the shell and its
+     * foreground group, with no permission check.
+     */
+    kill: () => term.destroy(),
     pause: () => term.pause(),
     resume: () => term.resume(),
     pendingInputBytes: () => ptyPendingInputBytes(term),
