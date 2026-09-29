@@ -180,12 +180,18 @@ describe('ACCESS_POLICY=entitlement: a signed-in account is not an entitled one'
     );
 
     // A request id is carried only when it is a safe token: a header cannot
-    // write a line break, or anything else, into the audit record.
+    // write a line break, or anything else, into the audit record. An unsafe
+    // or missing one is replaced by the id the rest of the request logs under
+    // and the response echoes, so the audit line joins its request.
     h.audit.length = 0;
-    await request(h.app).post(`/api/labs/${LAB}/start`).set({ ...as('newcomer'), 'x-request-id': 'bad id\tlevel=error' });
+    const bad = await request(h.app).post(`/api/labs/${LAB}/start`).set({ ...as('newcomer'), 'x-request-id': 'bad id\tlevel=error' });
+    const none = await request(h.app).post(`/api/labs/${LAB}/start`).set(as('newcomer'));
     await request(h.app).post(`/api/labs/${LAB}/start`).set({ ...as('newcomer'), 'x-request-id': 'req-123.ok' });
     const ids = h.audit.filter((event) => event.action === 'session:start').map((event) => event.requestId);
-    expect(ids).toEqual(['req-unknown', 'req-123.ok']);
+    expect(ids).toEqual([bad.headers['x-request-id'], none.headers['x-request-id'], 'req-123.ok']);
+    expect(ids[0]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(ids[1]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(ids).not.toContain('req-unknown');
   });
 
   it('still shows the catalog, the student their own access, and their history', async () => {
