@@ -11,16 +11,22 @@
 # dies again never gives them — so the alert that exists for "the service is
 # gone" can stay silent while students cannot use the platform.
 #
-# `ServiceRestartLoop` counts the transitions instead. The three cases below
-# pin the three things it has to get right:
+# `ServiceRestartLoop` counts restarts instead — new values of
+# `jtt_process_start_time_seconds`, which only a new process produces. The four
+# cases below pin the four things it has to get right:
 #
 #   1. a crash loop fires it;
 #   2. one clean restart — a deployment, or runbook §6 — does not;
 #   3. a service that is simply gone does not fire it, because it produces no
-#      transitions to count. That case is ServiceDown's, and it still fires.
+#      new processes to count. That case is ServiceDown's, and it still fires;
+#   4. scrapes that time out on a loaded host do not fire it: `up` flaps, the
+#      process does not restart. Measured in the 2026-09-28 drill, when this
+#      rule read `changes(up)` and paged "sandboxd keeps restarting" for a
+#      container Docker had never restarted.
 #
 # Case 1 is the one that fails without the rule. Case 3 is the one that keeps
-# the two alerts from both describing the same incident.
+# the two alerts from both describing the same incident. Case 4 fails on the
+# old expression.
 # ---------------------------------------------------------------------------
 
 rule_files:
@@ -39,6 +45,9 @@ tests:
     input_series:
       - series: 'up{job="api",instance="api:9400"}'
         values: '1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0'
+      # Every scrape that answered came from a new process.
+      - series: 'jtt_process_start_time_seconds{job="api",instance="api:9400"}'
+        values: '1000 _ 1030 _ 1060 _ 1090 _ 1120 _ 1150 _ 1180 _ 1210 _ 1240 _ 1270 _ 1300 _ 1330 _ 1360 _ 1390 _ 1420 _ 1450 _ 1480 _ 1510 _ 1540 _ 1570 _ 1600 _ 1630 _ 1660 _ 1690 _ 1720 _ 1750 _ 1780 _ 1810 _ 1840 _ 1870 _'
     alert_rule_test:
       # 12 minutes in: the 15m window holds the whole flapping series, and the
       # `for: 2m` has long since elapsed.
@@ -52,7 +61,7 @@ tests:
             exp_annotations:
               summary: 'api keeps restarting'
               description: >-
-                api has gone away and come back at least three times in fifteen
+                api has started a new process at least three times in fifteen
                 minutes. Its restart policy is putting it back rather than it
                 staying up, so students see intermittent failures while `up`
                 reads 1 between scrapes. Read the exit reason before restarting
@@ -73,6 +82,8 @@ tests:
     input_series:
       - series: 'up{job="terminal",instance="terminal:9401"}'
         values: '1x20 0 0 0 1x36'
+      - series: 'jtt_process_start_time_seconds{job="terminal",instance="terminal:9401"}'
+        values: '1000x20 _ _ _ 1400x36'
     alert_rule_test:
       - eval_time: 12m
         alertname: ServiceRestartLoop
@@ -93,6 +104,8 @@ tests:
     input_series:
       - series: 'up{job="sandboxd",instance="sandboxd:9402"}'
         values: '1x8 0x52'
+      - series: 'jtt_process_start_time_seconds{job="sandboxd",instance="sandboxd:9402"}'
+        values: '1000x8 _x52'
     alert_rule_test:
       - eval_time: 12m
         alertname: ServiceRestartLoop
@@ -111,3 +124,20 @@ tests:
                 its observability listener is. Students are affected if this is
                 api or terminal.
               runbook_url: docs/runbooks/RB-01-service-down.md
+
+  # ------------------------------- 4. slow scrapes are not restarts
+  #
+  # The drill: sandboxd's scrape overran Prometheus's 10 s timeout on every
+  # other attempt. `up` flaps as often as in case 1, but every sample that did
+  # arrive came from the same process, started once.
+  - interval: 15s
+    name: scrapes timing out on a loaded host do not look like a restart loop
+    input_series:
+      - series: 'up{job="sandboxd",instance="sandboxd:9402"}'
+        values: '1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0'
+      - series: 'jtt_process_start_time_seconds{job="sandboxd",instance="sandboxd:9402"}'
+        values: '1000 _ 1000 _ 1000 _ 1000 _ 1000 _ 1000 _ 1000 _ 1000 _ 1000 _ 1000 _ 1000 _ 1000 _ 1000 _ 1000 _ 1000 _ 1000 _ 1000 _ 1000 _ 1000 _ 1000 _ 1000 _ 1000 _ 1000 _ 1000 _ 1000 _ 1000 _ 1000 _ 1000 _ 1000 _ 1000 _'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: ServiceRestartLoop
+        exp_alerts: []
