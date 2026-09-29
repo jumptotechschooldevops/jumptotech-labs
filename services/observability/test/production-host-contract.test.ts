@@ -45,7 +45,12 @@ function shipped(): ResolvedCompose {
     postgres: {
       networks: { database: null },
       volumes: [{ type: 'volume', source: 'postgres-data', target: '/var/lib/postgresql/data' }],
-      healthcheck: { test: ['CMD-SHELL', 'pg_isready'] },
+      healthcheck: {
+        test: ['CMD-SHELL', 'pg_isready -h 127.0.0.1 -p 5432 -U "jumptotech" -d "jumptotech_labs"'],
+        interval: '5s',
+        retries: 12,
+        start_period: '3m0s',
+      },
     },
     api: {
       environment: gated({
@@ -188,6 +193,16 @@ describe('each unsafe variation is a FAIL', () => {
     ['a shell ceiling that is not a number', 'capacity.shell-ceilings', (c) => (c.services!.terminal!.environment!.TERMINAL_MAX_SESSIONS = 'many')],
     ['PostgreSQL data in a bind mount', 'durability.volumes', (c) => (c.services!.postgres!.volumes = [{ type: 'bind', source: '/tmp/pg', target: '/var/lib/postgresql/data' }])],
     ['no database health check', 'durability.healthchecks', (c) => delete c.services!.postgres!.healthcheck],
+    ['a database health check on the socket, which the initialiser passes', 'durability.database-first-boot', (c) =>
+      (c.services!.postgres!.healthcheck!.test = ['CMD-SHELL', 'pg_isready -U jumptotech'])],
+    ['a database marked unhealthy 70 s into a first boot', 'durability.database-first-boot', (c) =>
+      (c.services!.postgres!.healthcheck!.start_period = '10s')],
+    ["Docker's default database health check timings (90 s)", 'durability.database-first-boot', (c) => {
+      const check = c.services!.postgres!.healthcheck!;
+      delete check.interval;
+      delete check.retries;
+      delete check.start_period;
+    }],
     ['a service with no restart policy', 'durability.restart-policy', (c) => delete c.services!.sandboxd!.restart],
     ['restart: always, which undoes prod stop web', 'durability.restart-policy', (c) => (c.services!.web!.restart = 'always')],
     ['restart: on-failure', 'durability.restart-policy', (c) => (c.services!.grafana!.restart = 'on-failure')],
@@ -307,6 +322,19 @@ describe('the PostgreSQL stop grace period is read the way Compose renders it', 
     // Read as minutes, "500ms" would have been 30 000 s: a false PASS.
     expect(statusOf(grace('500ms'), 'durability.database-shutdown')).toBe('FAIL');
     expect(statusOf(grace('forever'), 'durability.database-shutdown')).toBe('FAIL');
+  });
+
+  it('allows a first boot of 180 s and no less, counting the start period, the interval and the retries', () => {
+    const timings = (start_period: string | undefined, interval: string, retries: number) =>
+      mutate((c) => {
+        c.services!.postgres!.healthcheck = { ...c.services!.postgres!.healthcheck!, start_period, interval, retries };
+        if (start_period === undefined) delete c.services!.postgres!.healthcheck!.start_period;
+      });
+    expect(statusOf(timings('2m0s', '5s', 12), 'durability.database-first-boot')).toBe('PASS');
+    expect(statusOf(timings('1m59s', '5s', 12), 'durability.database-first-boot')).toBe('FAIL');
+    expect(statusOf(timings(undefined, '5s', 36), 'durability.database-first-boot')).toBe('PASS');
+    expect(statusOf(timings('3m0s', 'soon', 12), 'durability.database-first-boot')).toBe('FAIL');
+    expect(statusOf(timings('3m0s', '5s', 0), 'durability.database-first-boot')).toBe('FAIL');
   });
 
   // CodeQL js/polynomial-redos: the old /(\d+)(h|m|s)/g rescanned every run of digits from each start.
