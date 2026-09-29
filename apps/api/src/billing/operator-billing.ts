@@ -69,8 +69,8 @@ export async function handleBillingRequest(
   const apply = body.apply === true;
   // Changing state needs a name and a reason, like every access change.
   const by = apply ? assertActor(body.by) : null;
-  if (apply) assertReason(body.reason);
-  const report = await deps.service.reconcile({ apply });
+  const reason = apply ? assertReason(body.reason) : null;
+  const report = await deps.service.reconcile(apply ? { apply, by: by!, reason: reason! } : { apply });
   deps.logger.info(
     'ops.operator.request',
     { action: 'billing_reconcile', outcome: apply ? 'applied' : 'report_only', count: report.drift.length },

@@ -65,6 +65,12 @@ interface EventBase {
   eventType: string;
   /** When the provider produced this event: the ordering key. */
   occurredAt: string;
+  /**
+   * Set only by `ops billing reconcile --apply`: the operator who asked for
+   * this re-processing and why. The access history records them, not the
+   * provider.
+   */
+  requestedBy?: { actor: string; reason: string };
 }
 
 /** A verified provider event, in the platform's terms. */
