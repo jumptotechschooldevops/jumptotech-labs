@@ -148,6 +148,7 @@ Dated; not maintained after their pass. Newest first within each group.
 | [security/redteam-audit-2026-09-27.md](security/redteam-audit-2026-09-27.md) | 2026-09-27 |
 | [releases/performance-capacity-certification-2026-09-27.md](releases/performance-capacity-certification-2026-09-27.md) | 2026-09-27 |
 | [releases/reliability-dr-audit-2026-09-28.md](releases/reliability-dr-audit-2026-09-28.md) | 2026-09-28 |
+| [releases/dr-certification-2026-09-28.md](releases/dr-certification-2026-09-28.md) | 2026-09-28 |
 | [releases/launch-readiness-20h-report.md](releases/launch-readiness-20h-report.md) | 2026-09-27 |
 | [releases/app-security-multi-tenant-audit.md](releases/app-security-multi-tenant-audit.md) | 2026-09-27 |
 | [releases/overnight-disaster-recovery-audit.md](releases/overnight-disaster-recovery-audit.md) | 2026-09-21/22 |

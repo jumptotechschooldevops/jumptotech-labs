@@ -590,6 +590,24 @@ everything written since the archive. So prefer this:
     ([docs/runtime-ownership.md](../runtime-ownership.md), RB-05).
   - After a host loss the runtime is gone too, and students simply start labs
     again.
+- **Access decisions go back to the archive.** A grant, trial, suspension,
+  restoration or revocation made after it is undone, and so is its
+  `access_events` record: a student suspended or revoked since the backup can
+  use labs again. Before students return, re-apply every access change the
+  incident record, the operator's notes or the api log (`access` events) shows
+  after the archive's time, with `ops access`.
+- **Sign-outs go back too.** Signing out deletes the sign-in's row; the archive
+  still has it, so a browser session ended after the backup is valid again until
+  its own expiry (`AUTH_SESSION_TTL_SECONDS`, default 12 h). Where a sign-out
+  was a security measure, end that account's sign-ins again (`ops sign-out`,
+  proposed in #173; until it merges, suspend the account with `ops access`
+  until those sign-ins expire).
+- **Billing state goes back, the provider's does not.** Subscriptions, checkouts
+  and processed webhook events after the archive are gone from the database,
+  while the provider still bills and will not resend events it delivered. A
+  student who paid after the backup has no subscription row. Compare with the
+  provider's own records before re-opening paid access
+  ([docs/billing.md](../billing.md)); no reconciliation command is on `main` yet.
 
 ## 9. What proves it
 
