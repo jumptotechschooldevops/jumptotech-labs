@@ -213,6 +213,15 @@ async function pidsOf(uid: number): Promise<number[]> {
   return pids;
 }
 
+/** Whether `pid` is a live process (a zombie is not). */
+async function isRunning(pid: number): Promise<boolean> {
+  try {
+    return !/^State:\s+Z/m.test(await readFile(`/proc/${pid}/status`, 'utf8'));
+  } catch {
+    return false;
+  }
+}
+
 suite('SEC-ARCH-2 — a Unix identity per session, on a real kernel', () => {
   let a: Shell;
   let b: Shell;
@@ -335,6 +344,31 @@ suite('SEC-ARCH-2 — a Unix identity per session, on a real kernel', () => {
     expect(await again.run('cat ~/notes')).toBe('mine');
     a = again;
   });
+
+  /*
+   * The service is not the shell's uid and holds no CAP_KILL, so a signal it
+   * sends to the shell is refused by the kernel. Only closing the PTY ends
+   * the shell, through the terminal hangup. A socket that goes away without
+   * doing so leaves its bash, and whatever runs in the foreground, until End.
+   */
+  it('ends the shell a reconnect replaces, and the shell of a socket that drops', async () => {
+    const replaced = await a.run('echo $$');
+    expect(replaced).toMatch(/^\d+$/);
+    const again = await attach(A);
+    expect(again.ready).toMatchObject({ type: 'ready', sessionId: A.sessionId });
+    await a.closed;
+    a = again;
+    await expect.poll(() => isRunning(Number(replaced)), { timeout: 10_000 }).toBe(false);
+
+    const dropped = await attach(A);
+    const droppedPid = await dropped.run('echo $$');
+    dropped.ws.terminate();
+    await dropped.closed;
+    await expect.poll(() => isRunning(Number(droppedPid)), { timeout: 10_000 }).toBe(false);
+
+    a = await attach(A);
+    expect(await a.run('cat ~/notes')).toBe('mine');
+  }, 60_000);
 
   it('ignores a uid, gid or user named in the auth frame', async () => {
     const planted = await attach(B, { uid: 0, gid: 0, shellUid: A.shellUid, user: 'root' });
