@@ -182,6 +182,10 @@ describe('verifying the schema without migrating', () => {
         if (sql.startsWith('SELECT version, checksum FROM schema_migrations')) {
           return { rows: (recorded ?? []) as R[], rowCount: recorded?.length ?? 0 } as QueryResult<R>;
         }
+        // A ledger from before `older_code_runs` (migration-rollback-class.test.ts has the rest).
+        if (sql.includes('information_schema.columns')) {
+          return { rows: [{ present: false }] as R[], rowCount: 1 } as QueryResult<R>;
+        }
         throw new Error(`unexpected statement: ${sql}`);
       },
     };

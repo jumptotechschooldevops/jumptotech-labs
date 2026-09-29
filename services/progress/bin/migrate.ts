@@ -48,10 +48,28 @@ async function main(): Promise<void> {
         console.log(`  ${applied.has(migration.version) ? 'applied' : 'PENDING'}  ${migration.version}`);
       }
       // A version recorded by a newer release: this checkout is older than the
-      // database, and `db:migrate` (and the production api) will refuse it.
+      // database, and `db:migrate` (and the production api) will refuse it —
+      // even under DATABASE_ALLOW_NEWER_SCHEMA when it is recorded restore-required.
       const shipped = new Set(migrations.map((migration) => migration.version));
-      for (const version of [...applied].filter((v) => !shipped.has(v)).sort()) {
-        console.log(`  UNKNOWN  ${version}  (applied by a newer release; not in this checkout)`);
+      const unknown = [...applied].filter((v) => !shipped.has(v)).sort();
+      const barred = new Set(
+        unknown.length === 0
+          ? []
+          : (
+              await db
+                .query<{ version: string }>(
+                  'SELECT version FROM schema_migrations WHERE version = ANY($1::text[]) AND older_code_runs IS FALSE',
+                  [unknown],
+                )
+                .catch(() => ({ rows: [] as Array<{ version: string }> }))
+            ).rows.map((row) => row.version),
+      );
+      for (const version of unknown) {
+        console.log(
+          barred.has(version)
+            ? `  UNKNOWN  ${version}  (applied by a newer release, recorded restore-required: restore the pre-migration archive)`
+            : `  UNKNOWN  ${version}  (applied by a newer release; not in this checkout)`,
+        );
       }
       return;
     }
