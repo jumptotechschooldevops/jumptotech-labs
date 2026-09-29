@@ -279,14 +279,18 @@ export class BillingService {
    * reported: whether that means "refunded and deleted" or "a bug" is a
    * person's call.
    */
-  async reconcile(options: { apply: boolean }): Promise<ReconcileReport> {
+  async reconcile(options: { apply: boolean; by?: string; reason?: string }): Promise<ReconcileReport> {
     const provider = this.#d.provider;
     const stored = await this.#d.store.subscriptions(provider.id, RECONCILE_LIMIT);
     const drift: Drift[] = [];
     const manual: Drift[] = [];
-    const toApply = new Map<string, SubscriptionSnapshot>();
+    // Each snapshot keeps the time it was asked for: it is applied as provider
+    // state *as of then*, so a real webhook that arrives between the fetch and
+    // the apply is newer and wins, and the snapshot is recorded as stale.
+    const toApply = new Map<string, { snapshot: SubscriptionSnapshot; fetchedAt: number }>();
 
     for (const s of stored) {
+      const fetchedAt = this.#now();
       const current = await this.#call('subscription', () => provider.getSubscription(s.subscriptionRef));
       if (!current) {
         const item: Drift = { subscriptionRef: s.subscriptionRef, userId: s.userId, field: 'missing_at_provider', stored: s.status, provider: 'absent' };
@@ -296,7 +300,7 @@ export class BillingService {
       }
       const found = compareSubscription(s, current, this.#d.offers);
       drift.push(...found);
-      if (found.length > 0) toApply.set(s.subscriptionRef, current);
+      if (found.length > 0) toApply.set(s.subscriptionRef, { snapshot: current, fetchedAt });
     }
 
     // Billing's row against what the account's subscriptions imply now —
@@ -323,22 +327,24 @@ export class BillingService {
           provider: `${desiredActive ? 'ACTIVE' : 'ended'} ${desired.kind}/${desired.planId ?? '-'} until ${desired.expiresAt}`,
         });
         if (!toApply.has(primary.subscriptionRef)) {
+          const fetchedAt = this.#now();
           const current = await this.#call('subscription', () => provider.getSubscription(primary.subscriptionRef));
-          if (current) toApply.set(primary.subscriptionRef, current);
+          if (current) toApply.set(primary.subscriptionRef, { snapshot: current, fetchedAt });
         }
       }
     }
 
     const applied: ReconcileReport['applied'] = [];
     if (options.apply) {
-      for (const [ref, snapshot] of toApply) {
-        const at = new Date(this.#now()).toISOString();
+      const requestedBy = options.by && options.reason ? { actor: options.by, reason: options.reason } : undefined;
+      for (const [ref, { snapshot, fetchedAt }] of toApply) {
         const result = await this.#d.processor.process({
           kind: 'subscription',
           eventId: `reconcile-${ref}-${this.#now()}`.slice(0, 255),
           eventType: 'reconcile.subscription',
-          occurredAt: at,
+          occurredAt: new Date(fetchedAt).toISOString(),
           subscription: snapshot,
+          ...(requestedBy ? { requestedBy } : {}),
         });
         applied.push({ subscriptionRef: ref, outcome: result.outcome });
       }

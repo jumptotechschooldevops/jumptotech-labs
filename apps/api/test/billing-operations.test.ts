@@ -240,6 +240,46 @@ describe('ops billing reconcile — finding and fixing what webhooks missed', ()
     expect(h.lines.some((l) => l.includes('"event":"billing.reconciled"'))).toBe(true);
   });
 
+  it('records the operator and reason of an --apply in the access history, not the provider', async () => {
+    const h = await compose();
+    const ref = await h.subscribe();
+    h.clock.now += 2 * 86_400_000;
+    h.billingProvider.silently(ref, (s) => ({ ...s, status: 'canceled', endedAt: new Date(h.clock.now).toISOString() }));
+
+    const fixed = await h.run('billing', 'reconcile', '--apply', '--by', 'aisalkyn', '--reason', 'INC-12 lost webhooks');
+    expect(fixed.code, fixed.err + fixed.out).toBe(0);
+    const [latest] = await h.accessStore.events(h.alice.userId, 1);
+    expect(latest).toMatchObject({ actor: 'aisalkyn' });
+    expect(latest!.reason).toContain('INC-12 lost webhooks');
+    expect(latest!.reason).toContain('reconcile.subscription');
+  });
+
+  it('never lets a snapshot fetched before a real webhook override that webhook', async () => {
+    const h = await compose();
+    const ref = await h.subscribe();
+    h.clock.now += 86_400_000;
+    // A renewal whose webhook was lost, so reconcile has something to re-process.
+    h.billingProvider.silently(ref, (s) => ({ ...s, currentPeriodEnd: new Date(h.clock.now + 30 * 86_400_000).toISOString() }));
+    // The student cancels while reconcile is between fetching the subscription and applying it.
+    const fetch = h.billingProvider.getSubscription.bind(h.billingProvider);
+    let raced = false;
+    h.billingProvider.getSubscription = async (subscriptionRef: string) => {
+      const snapshot = await fetch(subscriptionRef);
+      if (!raced) {
+        raced = true;
+        h.clock.now += 60_000;
+        await h.holder.service.simulate(h.alice.userId, 'cancel-now');
+        h.clock.now += 60_000;
+      }
+      return snapshot;
+    };
+
+    const fixed = await h.run('billing', 'reconcile', '--apply', '--by', 'ops', '--reason', 'weekly check', '--json');
+    expect(fixed.code, fixed.err + fixed.out).toBe(0);
+    expect(JSON.parse(fixed.out).data.applied).toEqual([{ subscriptionRef: ref, outcome: 'stale' }]);
+    expect((await h.decide()).allowed).toBe(false);
+  });
+
   it('finds billing rows that no longer match what their subscriptions imply after a configuration change', async () => {
     const h = await compose();
     await h.subscribe();
