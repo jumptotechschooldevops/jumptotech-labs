@@ -319,11 +319,11 @@ all, the provider must let only this deployment's client obtain tokens for
 `OIDC_AUDIENCE`, and that audience must be dedicated. This is wider than the
 "any account" gap above: it admits other clients, not only other accounts.
 
-**Sign-out does not revoke terminal access.** The terminal token minted for a
-running lab is bound to the lab session and user, not to the browser session,
-and lives up to `TERMINAL_SESSION_TTL_SECONDS` (1 h). A terminal WebSocket
-already open stays open after sign-out. Low risk for five trusted students on
-their own machines; recorded with D13.
+**Sign-out revokes terminal access** (fixed 2026-09-28; previously a terminal
+token outlived sign-out by up to `TERMINAL_SESSION_TTL_SECONDS`, 1 h). The token
+is bound to the browser sign-in that requested it; once that sign-in ends, no
+new shell opens and an open one closes on its next keystroke after an activity
+report (≤ 30 s of typing). See [authentication.md §3.6](../authentication.md).
 
 ## 9. TLS contract
 

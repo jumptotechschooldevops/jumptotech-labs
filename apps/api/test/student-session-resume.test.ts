@@ -116,7 +116,15 @@ describe('GET /api/sessions — the caller\'s own live sessions', () => {
     expect(res.body.data.sessions[0].session.sessionId).toBe(started.session.sessionId);
     expect(res.body.data.sessions[0].session.status).toBe('ACTIVE');
     expect(res.body.data.sessions[0].labTitle).toBe(registry.get('LINUX-001').title);
-    expect(res.body.data.limits).toEqual({ maxActiveSessionsPerStudent: 1 });
+    // The deadlines come from the deployment (defaults: 60 and 20 minutes), so
+    // the lab page can state them before Start.
+    expect(res.body.data.limits).toEqual({ maxActiveSessionsPerStudent: 1, maxSessionMinutes: 60, idleTimeoutMinutes: 20 });
+  });
+
+  it('reports the deployment\u2019s own time limits, not the defaults', async () => {
+    const { app } = await harness({ MAX_SESSION_MINUTES: '90', IDLE_TIMEOUT_MINUTES: '30' });
+    const res = await mine(app, ALICE);
+    expect(res.body.data.limits).toMatchObject({ maxSessionMinutes: 90, idleTimeoutMinutes: 30 });
   });
 
   it('never shows one student another student\'s session', async () => {

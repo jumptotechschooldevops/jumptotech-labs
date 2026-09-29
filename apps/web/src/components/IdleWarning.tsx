@@ -20,8 +20,13 @@ export function IdleWarning({
   return (
     <div className="banner banner--warning" role="alert">
       <p className="banner__text">
-        <strong>Are you still working?</strong> This lab has been inactive, and its environment will be removed in about{' '}
-        {minutes} minute{minutes === 1 ? '' : 's'}.
+        <strong>Are you still working?</strong> This lab has been inactive, and its environment will be removed{' '}
+        {/* Read once when the warning appears. The count changes every minute,
+            and inside an alert each change was announced again, assertively. */}
+        <span aria-live="off">
+          in about {minutes} minute{minutes === 1 ? '' : 's'}
+        </span>
+        .
       </p>
       <button type="button" className="btn btn--sm btn--secondary" onClick={onContinue} disabled={busy}>
         {busy ? 'Keeping it…' : 'Stay active'}
