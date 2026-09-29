@@ -1,7 +1,8 @@
 # RB-19 — Host memory, disk and CPU pressure
 
 **Alerts:** `HostMemoryCritical`, `HostDiskSpaceCritical` (critical);
-`HostMemoryPressure`, `HostDiskSpaceLow`, `HostCpuSaturated` (warning)
+`HostMemoryPressure`, `HostDiskSpaceLow`, `HostCpuSaturated`,
+`ProcessFileDescriptorsHigh` (warning)
 **Source:** the API container reads `/proc/meminfo`, `/proc/loadavg` and statfs.
 The kernel does not namespace these, so they are the host's figures.
 `filesystem="container_root"` is Docker's storage: images, containers and named
@@ -62,6 +63,26 @@ docker stats --no-stream
 4. Prometheus data: 15 days of retention by time, with no size cap, normally
    small at this scale.
 5. A process outside the stack: `ps aux --sort=-%mem | head`.
+
+### File descriptors (`ProcessFileDescriptorsHigh`)
+
+One service holds more than 1000 open descriptors for 15 minutes. That is a
+leak, not load: about 30 is idle and a five-student class peaked at 51 in the
+2026-09-28 drill. The container limit is 1,048,576, so the process will not
+hit it soon, but each leaked descriptor is usually a socket, PTY or `docker
+exec` that is still holding something.
+
+```bash
+q 'jtt_process_open_fds'
+q 'jtt_terminal_connections_open'     # terminal: sockets it knows about
+q 'jtt_sandboxd_shells_open'          # sandboxd: broker PTYs it knows about
+q 'deriv(jtt_process_open_fds[30m])'  # still climbing?
+```
+
+If the count climbs while the connection gauges stay flat, the leak is in the
+service, not the class: collect `make private-beta-diagnostics` first, then
+restart that one service outside class time (operations runbook §6). For the
+terminal, see also `TerminalPtyDrift` ([RB-12](RB-12-terminal.md)).
 
 ## 5. Fix
 

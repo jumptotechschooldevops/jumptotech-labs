@@ -242,9 +242,10 @@ describe('the private-beta alert set', () => {
     // alert-delivery alerts (platform.yml); 63 with the disaster-recovery
     // audit's DatabaseRecreatedSinceLastBackup (database.yml); 64 with the
     // reliability audit's IdentityProviderUnreachable (security.yml), without
-    // which nothing fired while nobody could sign in. Adding alerts is fine;
-    // do it on purpose.
-    expect(ALERTS.length).toBeLessThanOrEqual(64);
+    // which nothing fired while nobody could sign in; 65 with the
+    // observability audit's ProcessFileDescriptorsHigh (api.yml), the one
+    // saturation signal with no alert. Adding alerts is fine; do it on purpose.
+    expect(ALERTS.length).toBeLessThanOrEqual(65);
   });
 });
 
