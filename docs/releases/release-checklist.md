@@ -163,7 +163,7 @@ Everything in B, plus the rows below. None of them blocks A.
 | C-13 | Failover and recovery objectives | BLOCKER | One host; no HA PostgreSQL | Stated RPO/RTO; multi-host or tested host replacement | yes |
 | C-14 | Capacity at 25 and beyond | BLOCKER | Control plane measured to 50 on a laptop; no sandbox run above 5 on Linux | Measure; parallel reaper teardown; broker retry policy (G2) | yes |
 | C-15 | Graceful deployment drain | BLOCKER | See B-7 | Readiness-off drain, `stop_grace_period`, terminal reconnect across deploys | yes |
-| C-16 | Supply chain | BLOCKER | No SBOM, signing or published images; Dependabot PRs unreviewed | Release workflow with provenance | yes |
+| C-16 | Supply chain | BLOCKER | No SBOM, signing or published images; Dependabot PRs unreviewed. The 11 open Dependabot alerts on 2026-09-28 are one moderate advisory in `vitest` / `@vitest/mocker`, a development dependency no runtime image contains; Dependabot PR #6 bumps it | Release workflow with provenance | yes |
 | C-17 | External penetration test | BLOCKER | Only internal red-team passes ([../security/redteam-wave2-2026-09-27.md](../security/redteam-wave2-2026-09-27.md)) | Commission one | yes |
 | C-18 | Privacy | BLOCKER | No deletion or export; no data-retention statement for session history (008) | GDPR-style deletion, export, retention | yes |
 
