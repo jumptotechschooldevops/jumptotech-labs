@@ -189,6 +189,29 @@ describe('the identity provider is down', () => {
   });
 });
 
+describe('a student\'s browser during the outage', () => {
+  // What a browser sends on a top-level navigation; the tests above are API clients and keep the JSON.
+  const NAVIGATION = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8';
+
+  it('is sent back into the app with ?signin=unavailable, from Sign in and from the callback', async () => {
+    const idp = await provider();
+    const { app } = await api(idp);
+    idp.signInAs({ subject: 'student-c', email: 'c@example.test' });
+    const flow = await beginLogin(app);
+    await idp.close();
+
+    const callback = await finishLogin(app, flow).set('Accept', NAVIGATION);
+    expect(callback.status).toBe(302);
+    expect(new URL(callback.headers.location as string).search).toBe('?signin=unavailable');
+
+    const restarted = await api(idp);
+    const login = await request(restarted.app).get('/auth/login').query({ returnTo: '/#/labs/LINUX-001' }).set('Accept', NAVIGATION);
+    expect(login.status).toBe(302);
+    const back = new URL(login.headers.location as string);
+    expect(`${back.search}${back.hash}`).toBe('?signin=unavailable#/labs/LINUX-001');
+  });
+});
+
 describe('discovery tells an outage from a mistake', () => {
   const answering = (status: number, body: unknown = {}) =>
     (async () => new Response(JSON.stringify(body), { status })) as unknown as typeof fetch;

@@ -780,7 +780,7 @@ export function createAuthMetrics(registry: Registry): AuthMetrics {
 }
 
 /** What the reaper recovered on a dead owner's behalf (BETA-P0-007, counted by BETA-P0-018). */
-export const REAPER_RECOVERY_REASONS = ['interrupted_reset', 'abandoned_end', 'abandoned_start'] as const;
+export const REAPER_RECOVERY_REASONS = ['interrupted_reset', 'abandoned_end', 'abandoned_start', 'sandbox_lost'] as const;
 
 /** Why a session teardown the reaper drove did not finish in that sweep. */
 export const REAPER_TEARDOWN_REASONS = ['expired', 'idle', 'abandoned'] as const;

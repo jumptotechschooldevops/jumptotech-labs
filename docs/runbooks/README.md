@@ -30,6 +30,10 @@ diagnosis, and the alerts that look alike are known in advance.
 | **critical** | Students are affected now, or a safety mechanism has stopped. Pages. |
 | **warning** | Degraded, or heading somewhere bad. Ticket. |
 
+Instructors teaching a class use [instructor-guide.md](instructor-guide.md)
+and the classroom view instead: it classifies problems P0–P3 and says when to
+escalate here.
+
 ## Index
 
 | Runbook | Alerts |

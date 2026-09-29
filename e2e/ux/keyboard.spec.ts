@@ -74,6 +74,25 @@ test('a lab can be launched, used and left with the keyboard: into the terminal,
   expect(await focused(page)).not.toBe('body');
 });
 
+test('Shift+Tab still leaves a terminal whose output has scrolled', async ({ page, platform }) => {
+  await openSignedIn(page, platform, undefined, '#/labs/LINUX-001');
+  await page.getByRole('button', { name: 'Launch lab' }).focus();
+  await page.keyboard.press('Enter');
+  await expectTerminalConnected(page);
+  await expect.poll(() => focused(page)).toBe('terminal');
+
+  // Enough lines that the terminal has scrollback: its viewport now scrolls,
+  // and a scrollable container is a tab stop of its own unless told otherwise.
+  for (let i = 0; i < 60; i += 1) await page.keyboard.press('Enter');
+  await expect
+    .poll(() => page.locator('.xterm-viewport').evaluate((node) => node.scrollHeight > node.clientHeight))
+    .toBe(true);
+
+  await page.keyboard.press('Shift+Tab');
+  expect(await focused(page)).not.toBe('terminal');
+  expect(await focused(page)).not.toBe('body');
+});
+
 test('the End dialog opens on Cancel, keeps Tab inside, closes on Escape, and gives focus back to End lab', async ({ page, platform }) => {
   await openSignedIn(page, platform);
   await launch(page);

@@ -125,6 +125,35 @@ export function signIn(returnTo: string = currentReturnTo()): void {
   window.location.assign(target);
 }
 
+/**
+ * Why the last sign-in did not complete, as the API reported it on the way
+ * back into the app (`/?signin=<reason>`, apps/api/src/routes/auth.ts).
+ *
+ * `/auth/login` and `/auth/callback` are navigations, not fetches, so a failure
+ * there cannot come back as an error object. The API sends the browser home
+ * with one of these words instead of a page of JSON.
+ */
+export type SignInFailure = 'cancelled' | 'expired' | 'unavailable' | 'failed';
+
+const SIGN_IN_FAILURES: ReadonlySet<string> = new Set<SignInFailure>(['cancelled', 'expired', 'unavailable', 'failed']);
+
+/**
+ * Read `?signin=` once, and take it out of the address bar.
+ *
+ * Removed at once, so a reload or a bookmark does not report an old failure
+ * again. An unknown value is still a failed sign-in: the query only ever
+ * exists because one did not complete.
+ */
+export function takeSignInFailure(): SignInFailure | null {
+  if (typeof window === 'undefined') return null;
+  const url = new URL(window.location.href);
+  const value = url.searchParams.get('signin');
+  if (value === null) return null;
+  url.searchParams.delete('signin');
+  window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
+  return SIGN_IN_FAILURES.has(value) ? (value as SignInFailure) : 'failed';
+}
+
 export interface SignOutResult {
   signedOut: boolean;
   /** The provider's single-logout URL, when it publishes one. */

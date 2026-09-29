@@ -142,6 +142,12 @@ Every step is manual; nothing deploys on merge.
 | No labs in the catalog | — | RB-07 |
 | Security event alert | — | RB-08 |
 
+Instructors work from the classroom view (`#/classroom`) and
+[instructor-guide.md](instructor-guide.md), and escalate with a lab's **Support
+ID** — its session id. `ops session <support-id>` reads the same lab; the
+classroom's lab page (as an ADMIN) shows its sandbox, namespace and raw
+status reason.
+
 Student-facing errors carry a stable code and an `x-request-id`; ask the student
 for the id and follow it across services
 ([../incident-troubleshooting.md](../incident-troubleshooting.md#following-one-request-across-three-services)).

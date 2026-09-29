@@ -130,3 +130,27 @@ test('five students side by side each see only their own lab, name and progress,
     await Promise.all(pages.map(({ page }) => page.context().close()));
   }
 });
+
+test('a sign-in cancelled at the provider comes back to the same page, says so, and the next one works', async ({ page, platform }) => {
+  await page.goto('/#/labs/LINUX-001');
+  await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible();
+
+  platform.signInFailure = 'cancelled';
+  await page.getByRole('button', { name: 'Sign in' }).click();
+
+  // Not a page of JSON: the app, with a reason and the same button.
+  await expect(page.getByRole('alert')).toContainText('Sign-in was cancelled');
+  await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible();
+  await expect.poll(() => new URL(page.url()).search).toBe('');
+  expect(new URL(page.url()).hash).toBe('#/labs/LINUX-001');
+
+  // A reload does not report it again.
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+
+  platform.nextSignIn = ALICE;
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Files and Directories' })).toBeVisible();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+});

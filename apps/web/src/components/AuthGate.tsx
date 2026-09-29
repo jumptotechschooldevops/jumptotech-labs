@@ -6,7 +6,40 @@
  * image: "please sign in" shown when the real problem is that the API is down.
  */
 import { Fragment, type ReactNode } from 'react';
+import type { SignInFailure } from '../lib/auth';
 import { useAuth } from '../lib/AuthContext';
+
+const SIGN_IN_FAILURE_TEXT: Record<SignInFailure, { title: string; message: string }> = {
+  cancelled: {
+    title: 'Sign-in was cancelled',
+    message: 'You are not signed in. Press Sign in when you are ready to try again.',
+  },
+  expired: {
+    title: 'That sign-in did not finish',
+    message:
+      'It was left open too long, or it was started again in another tab or window. Press Sign in to start a fresh one.',
+  },
+  unavailable: {
+    title: 'Sign-in is unavailable right now',
+    message:
+      'The sign-in service could not be reached. Wait a minute, then press Sign in again. If it keeps happening, let your instructor know.',
+  },
+  failed: {
+    title: 'Sign-in did not complete',
+    message: 'Press Sign in to try again. If it keeps happening, let your instructor know.',
+  },
+};
+
+/** A sign-in the student just came back from without being signed in: say what happened. */
+function SignInFailureNotice({ reason }: { reason: SignInFailure }) {
+  const text = SIGN_IN_FAILURE_TEXT[reason];
+  return (
+    <div className="notice notice--warning auth-gate__notice" role="alert">
+      <p className="notice__title">{text.title}</p>
+      <p className="notice__message">{text.message}</p>
+    </div>
+  );
+}
 
 export interface AuthGateProps {
   children: ReactNode;
@@ -47,6 +80,7 @@ export function AuthGate({ children }: AuthGateProps) {
     return (
       <main className="auth-gate">
         <h1 className="auth-gate__title">JumpToTech Labs</h1>
+        {auth.signInFailure ? <SignInFailureNotice reason={auth.signInFailure} /> : null}
         {auth.expired ? (
           /*
            * The student was working a moment ago and every page just vanished.
