@@ -35,22 +35,29 @@ groups:
       # scrape and dies again never gives them. The restart policy turns a clean
       # outage into a flap, so something has to count flaps.
       #
-      # `changes()` rather than an average over `up`: it counts transitions, so
-      # a service that is simply down contributes none and stays ServiceDown's
-      # to report — and Alertmanager's first inhibit rule suppresses this one
-      # underneath it anyway. Six changes in fifteen minutes is three full
-      # down-up cycles: more than an operator restarting a service by hand,
-      # and far fewer than a real loop, which Docker's one-minute backoff
-      # ceiling puts at about fifteen.
+      # A restart is a new process, so it is counted where only a new process
+      # can change it: `process_start_time_seconds`. This read `changes(up)`
+      # until the 2026-09-28 observability drill, where sandboxd — never
+      # restarted, RestartCount 0 — paged "keeps restarting": its scrapes
+      # overran the 10 s timeout on a loaded host, `up` flapped ten times in
+      # fifteen minutes, and a flap is not a restart. The start time does not
+      # move when a scrape fails, and it moves exactly once per restart.
+      #
+      # A service that is simply down contributes no new start times and stays
+      # ServiceDown's to report — and Alertmanager's first inhibit rule
+      # suppresses this one underneath it anyway. Three restarts in fifteen
+      # minutes is more than an operator restarting a service by hand, and far
+      # fewer than a real loop, which Docker's one-minute backoff ceiling puts
+      # at about fifteen.
       - alert: ServiceRestartLoop
-        expr: changes(up{job=~"api|terminal|sandboxd"}[15m]) >= 6
+        expr: changes(jtt_process_start_time_seconds{job=~"api|terminal|sandboxd"}[15m]) >= 3
         for: 2m
         labels:
           severity: warning
         annotations:
           summary: '{{ $labels.job }} keeps restarting'
           description: >-
-            {{ $labels.job }} has gone away and come back at least three times in
+            {{ $labels.job }} has started a new process at least three times in
             fifteen minutes. Its restart policy is putting it back rather than it
             staying up, so students see intermittent failures while `up` reads 1
             between scrapes. Read the exit reason before restarting it again.
