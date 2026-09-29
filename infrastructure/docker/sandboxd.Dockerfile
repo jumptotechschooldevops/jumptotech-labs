@@ -115,7 +115,10 @@ EXPOSE 4002
 # its TypeScript at start, which took minutes on a loaded host, and a failing
 # check inside the period costs a healthy start nothing. With 10 s, `up --wait`
 # failed a slow start, and a service waiting on this one never started.
-HEALTHCHECK --interval=10s --timeout=3s --start-period=300s --retries=5 \
+# 10 s, not 3: the probe boots a `node -e` process of its own, which took most
+# of 3 s at load 20–40 (2026-09-28 observability drill), and this service was
+# marked unhealthy while serving.
+HEALTHCHECK --interval=15s --timeout=10s --start-period=300s --retries=5 \
   CMD node -e "const p=+(process.env.SANDBOXD_PORT||4002);if(process.env.SANDBOXD_TLS_CERT_FILE){require('node:net').connect(p,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))}else{fetch('http://127.0.0.1:'+p+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))}"
 
 # One process, so SIGTERM from tini reaches the shutdown handler: the tsx CLI
