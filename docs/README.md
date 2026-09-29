@@ -142,6 +142,7 @@ Dated; not maintained after their pass. Newest first within each group.
 
 | Record | Date |
 |---|---|
+| [releases/final-launch-readiness-2026-09-28.md](releases/final-launch-readiness-2026-09-28.md) | 2026-09-28 |
 | [releases/student-experience-audit-2026-09-28.md](releases/student-experience-audit-2026-09-28.md) | 2026-09-28 |
 | [releases/lab-certification-2026-09-27.md](releases/lab-certification-2026-09-27.md) | 2026-09-27 |
 | [security/redteam-wave2-2026-09-27.md](security/redteam-wave2-2026-09-27.md) | 2026-09-27 |
