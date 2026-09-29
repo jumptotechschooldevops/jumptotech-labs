@@ -29,6 +29,9 @@
 #   12. db-backup.sh backs the restored database up (its ledger is the
 #       original); a database re-created under the same name after that is
 #       refused, and accepted only with BACKUP_ACCEPT_NEW_DATABASE=true
+#   13. --replace over a live database that handed out shell uids after the
+#       backup: the restored uid sequence carries on after them (SEC-ARCH-2),
+#       and everything else is still the archive
 #
 # Environment: JTT_TEST_RUN_ID (run-scoped names), DRILL_POSTGRES_IMAGE
 # (default postgres:16-alpine, the image docker-compose.yml runs).
@@ -155,6 +158,8 @@ for expected in \
   "^table users 6 " "^table students 6 " "^table lab_attempts 60 " "^table lab_progress 60 " \
   "^table hint_usage 60 " "^table lab_sessions 12 " "^table auth_sessions 6 " "^table user_roles 3 " \
   "^table schema_migrations $migration_count " "^sequence lab_attempts_seq_seq 60$" \
+  "^table access_entitlements 6 " "^table access_events 9 " "^table session_events 37 " \
+  "^table billing_subscriptions 1 " "^sequence lab_session_shell_uid_seq 1900000011$" \
   "^known drill-student-003 Drill Student 3 7/10$"; do
   grep -q "$expected" "$work/source.fingerprint" || fail "the seeded source does not match /$expected/"
 done
@@ -317,6 +322,29 @@ echo "    refused: a database re-created after the newest archive; every archive
 BACKUP_ACCEPT_NEW_DATABASE=true restored_backup --label accepted >/dev/null 2>"$work/backup-accepted.log" \
   || { indent "$work/backup-accepted.log"; fail "BACKUP_ACCEPT_NEW_DATABASE=true did not accept the new database"; }
 echo "    accepted with BACKUP_ACCEPT_NEW_DATABASE=true"
+
+# --- 13 ---------------------------------------------------------------------------------
+
+say "13. --replace over a database that handed out shell uids after the backup"
+# The restored database goes back to being the live one, and hands out uids up
+# to 1900000500 after the archive was taken (the archive's twelve sessions end
+# at 1900000011). Restoring the archive over it must not hand any of those out
+# again: shells that held them may still be running in the terminal.
+psql_in target postgres -c "ALTER DATABASE $database RENAME TO ${database}_drill_recreated" >/dev/null
+psql_in target postgres -c "ALTER DATABASE ${database}_drill_lost RENAME TO $database" >/dev/null
+[ "$(psql_in target "$database" -c "SELECT last_value FROM lab_session_shell_uid_seq")" = 1900000011 ] \
+  || fail "the restored database's shell uid sequence is not where the archive left it"
+psql_in target "$database" -c "SELECT setval('lab_session_shell_uid_seq', 1900000500, true)" >/dev/null
+restore_as_operator --replace "$database" --confirm "$database" "$archive" 2>"$work/replace-uids.log" \
+  || { indent "$work/replace-uids.log"; fail "--replace over the live database failed"; }
+grep -q 'continues after 1900000500' "$work/replace-uids.log" \
+  || { indent "$work/replace-uids.log"; fail "--replace did not say it carried the shell uid sequence forward"; }
+next_uid=$(psql_in target "$database" -c "SELECT nextval('lab_session_shell_uid_seq')")
+[ "$next_uid" = 1900000501 ] || fail "after the restore the next shell uid is $next_uid, one the live database had already handed out"
+fingerprint target "$database" | grep -v '^sequence lab_session_shell_uid_seq ' >"$work/replace-uids.fingerprint"
+grep -v '^sequence lab_session_shell_uid_seq ' "$work/source.fingerprint" | diff -u - "$work/replace-uids.fingerprint" \
+  || fail "apart from the shell uid sequence, the restored database differs from the archive"
+echo "    the next shell uid is 1900000501, after the live database's; every row, the schema and the ledger are the archive's"
 
 printf '\nRESTORE DRILL PASSED in %ss (the --replace restore itself took %ss): backup, source destroyed, fresh server, restore, identical fingerprint, migrations current, application read and write.\n' \
   "$(($(date +%s) - started_at))" "$restore_seconds"

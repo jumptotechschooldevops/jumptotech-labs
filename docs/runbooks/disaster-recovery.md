@@ -123,7 +123,9 @@ per-session isolation of SEC-ARCH-2 is gone until the release matches again.
    ([RB-02 §4d](RB-02-database.md)). The nightly `db-backup.sh` now **refuses** to
    back that database up, so retention cannot age the good archives out.
 5. Select, verify and inspect the newest archive; `--replace` (postgres-backup-restore.md §6, §7.1).
-6. `prod up -d --wait`; validate (§6 below).
+6. `prod restart terminal` (its shells may hold uids the restored database would
+   hand out again: postgres-backup-restore.md §8), then `prod up -d --wait`;
+   validate (§6 below).
 
 **Split brain.** Anything students wrote between the re-creation and the restore
 lives only in the `jumptotech_labs_prerestore_<ts>` database `--replace` keeps.
