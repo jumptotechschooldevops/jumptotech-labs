@@ -75,6 +75,7 @@ fails the build for one that does not:
 | running the beta day to day; `prod` and the helpers | [runbooks/private-beta-operations.md](runbooks/private-beta-operations.md) |
 | adding, removing and protecting student accounts: sign-in, access, sign-out, a stolen session, emergency revoke | [runbooks/identity-and-access.md](runbooks/identity-and-access.md) |
 | teaching a class: the classroom view, what to check when a student is stuck, P0–P3, when to escalate | [runbooks/instructor-guide.md](runbooks/instructor-guide.md) |
+| the first five-student class, in order: the day before, 30 and 5 minutes before, what students say during class, after class | [runbooks/first-class.md](runbooks/first-class.md) |
 | incidents A–U, by what you see | [runbooks/private-beta-incident-response.md](runbooks/private-beta-incident-response.md) |
 | what fails, what students see, what recovers by itself: failure domains, journeys, failure matrix, measured RPO/RTO, restart order, retention | [reliability-failure-model.md](reliability-failure-model.md) |
 | running an incident: severity, roles, status and class messages, the postmortem template | [runbooks/incident-management.md](runbooks/incident-management.md) |
