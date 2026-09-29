@@ -17,6 +17,11 @@
  *     otherwise. That is the rollback boundary: older code on a newer schema is
  *     a decision (restore the pre-upgrade backup, or accept it explicitly),
  *     never something that happens because a rollback started cleanly.
+ *   - each migration says whether the release before it can run on its schema
+ *     (`-- rollback: older-code-runs` or `-- rollback: restore-required`), and
+ *     the ledger keeps that answer. A release that finds an unknown version
+ *     recorded as `restore-required` refuses even under the override: the
+ *     release that applied it knew its predecessors could not run on it.
  *
  * Nothing in this runner drops or truncates anything. The only statements
  * executed are the ones in the migration files, and reviewing those files is
@@ -43,12 +48,54 @@ const MIGRATION_LOCK_KEY = 5_318_008_005;
 
 const MIGRATION_FILE_PATTERN = /^(\d{3,})_([a-z0-9_-]+)\.sql$/;
 
+/**
+ * Can the release before a migration run on the schema it leaves?
+ *
+ *   - `older-code-runs` — yes, as an explicit rollback decision
+ *     (DATABASE_ALLOW_NEWER_SCHEMA=true): older code reads and writes it
+ *     correctly, though it may lack what the migration was for.
+ *   - `restore-required` — no: older code fails on it or decides wrongly from
+ *     it, so the way back is the pre-migration archive.
+ *
+ * Stated by the migration itself, in a line of its own:
+ *
+ *   -- rollback: restore-required
+ */
+export type RollbackClass = 'older-code-runs' | 'restore-required';
+
+const ROLLBACK_HEADER = /^-- rollback: (older-code-runs|restore-required)[ \t]*$/m;
+
+/**
+ * 001–010 were applied before the header existed, and an applied file can
+ * never change (its checksum is in every ledger), so they are classified here.
+ * Measured, not assumed: the previous release of each was run against the
+ * newer schema (docs/releases/dr-certification-2026-09-28.md). Only 010 fails:
+ * pre-010 code writes every access change with ON CONFLICT (user_id, scope),
+ * which no constraint matches after 010 re-keys access_entitlements, and reads
+ * one row per account where an account can now have two — so an operator's
+ * suspension can lose to a subscription, depending on the query plan.
+ */
+export const ROLLBACK_CLASS_BEFORE_HEADERS: Readonly<Record<string, RollbackClass>> = {
+  '001_progress': 'older-code-runs',
+  '002_sessions': 'older-code-runs',
+  '003_users_and_ownership': 'older-code-runs',
+  '004_auth_sessions': 'older-code-runs',
+  '005_session_recovery': 'older-code-runs',
+  '006_access_entitlements': 'older-code-runs',
+  '007_session_shell_uid': 'older-code-runs',
+  '008_session_events': 'older-code-runs',
+  '009_access_plans_and_kinds': 'older-code-runs',
+  '010_billing': 'restore-required',
+};
+
 export interface Migration {
   /** Sort key and primary key, e.g. `001_progress`. */
   version: string;
   filename: string;
   sql: string;
   checksum: string;
+  /** From the file's `-- rollback:` line, or the table above; null when neither says. */
+  rollback: RollbackClass | null;
 }
 
 export interface MigrationReport {
@@ -116,11 +163,14 @@ export async function loadMigrations(dir: string = MIGRATIONS_DIR): Promise<Migr
       continue;
     }
     const sql = await readFile(path.join(dir, filename), 'utf8');
+    const version = filename.replace(/\.sql$/, '');
+    const declared = ROLLBACK_HEADER.exec(sql)?.[1] as RollbackClass | undefined;
     migrations.push({
-      version: filename.replace(/\.sql$/, ''),
+      version,
       filename,
       sql,
       checksum: createHash('sha256').update(sql).digest('hex'),
+      rollback: declared ?? ROLLBACK_CLASS_BEFORE_HEADERS[version] ?? null,
     });
   }
 
@@ -133,6 +183,61 @@ export async function loadMigrations(dir: string = MIGRATIONS_DIR): Promise<Migr
 interface AppliedRow {
   version: string;
   checksum: string;
+}
+
+function newerSchemaError(unknown: string[]): MigrationError {
+  return new MigrationError(
+    `The database records migration(s) this release does not ship: ${unknown.join(', ')}. ` +
+      'It was migrated by a newer release, and this code was not written for that schema.',
+    'Deploy the release that matches the database, or restore the pre-upgrade backup ' +
+      '(docs/runbooks/postgres-backup-restore.md §6.4). To run this release against the newer ' +
+      'schema anyway — an explicit rollback decision — set DATABASE_ALLOW_NEWER_SCHEMA=true.',
+  );
+}
+
+/**
+ * Under DATABASE_ALLOW_NEWER_SCHEMA: which of the unknown versions did the
+ * release that applied them record as `restore-required`? A ledger from before
+ * the column existed answers nothing, which keeps the override's old meaning.
+ */
+async function versionsOlderCodeCannotRun(client: SqlExecutor, unknown: string[]): Promise<string[]> {
+  const column = await client.query<{ present: boolean }>(
+    `SELECT EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_schema = current_schema() AND table_name = 'schema_migrations'
+                       AND column_name = 'older_code_runs') AS present`,
+  );
+  if (column.rows[0]?.present !== true) return [];
+  const { rows } = await client.query<{ version: string }>(
+    'SELECT version FROM schema_migrations WHERE version = ANY($1::text[]) AND older_code_runs IS FALSE ORDER BY version',
+    [unknown],
+  );
+  return rows.map((row) => row.version);
+}
+
+function restoreRequiredError(barred: string[]): MigrationError {
+  return new MigrationError(
+    `The database records migration(s) this release does not ship: ${barred.join(', ')}, and the release ` +
+      'that applied them recorded that older code cannot run on the schema they leave (rollback: restore-required).',
+    'DATABASE_ALLOW_NEWER_SCHEMA does not override this. Restore the pre-upgrade backup ' +
+      '(docs/runbooks/postgres-backup-restore.md §6.4), or deploy the release that matches the database.',
+  );
+}
+
+/** Refuse, or warn under the override, when the ledger holds versions this release does not ship. */
+async function checkNewerSchema(
+  client: SqlExecutor,
+  unknown: string[],
+  allowNewerSchema: boolean,
+  log: (message: string) => void,
+): Promise<void> {
+  if (unknown.length === 0) return;
+  if (!allowNewerSchema) throw newerSchemaError(unknown);
+  const barred = await versionsOlderCodeCannotRun(client, unknown);
+  if (barred.length > 0) throw restoreRequiredError(barred);
+  log(
+    `WARNING: running against a newer schema (DATABASE_ALLOW_NEWER_SCHEMA): ` +
+      `this release does not ship ${unknown.join(', ')}`,
+  );
 }
 
 /**
@@ -192,21 +297,7 @@ export async function verifySchema(
 
     const shipped = new Set(migrations.map((migration) => migration.version));
     const unknown = [...applied.keys()].filter((version) => !shipped.has(version)).sort();
-    if (unknown.length > 0) {
-      if (!allowNewerSchema) {
-        throw new MigrationError(
-          `The database records migration(s) this release does not ship: ${unknown.join(', ')}. ` +
-            'It was migrated by a newer release, and this code was not written for that schema.',
-          'Deploy the release that matches the database, or restore the pre-upgrade backup ' +
-            '(docs/runbooks/postgres-backup-restore.md §6.4). To run this release against the newer ' +
-            'schema anyway — an explicit rollback decision — set DATABASE_ALLOW_NEWER_SCHEMA=true.',
-        );
-      }
-      log(
-        `WARNING: running against a newer schema (DATABASE_ALLOW_NEWER_SCHEMA): ` +
-          `this release does not ship ${unknown.join(', ')}`,
-      );
-    }
+    await checkNewerSchema(client, unknown, allowNewerSchema, log);
 
     const pending: string[] = [];
     const skipped: string[] = [];
@@ -244,6 +335,9 @@ async function applyPending(
       applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )
   `);
+  // Whether the release before each migration can run on it (`-- rollback:`).
+  // NULL: not stated — a ledger row written before this column existed.
+  await client.query('ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS older_code_runs BOOLEAN');
 
   const { rows } = await client.query<AppliedRow>(
     'SELECT version, checksum FROM schema_migrations',
@@ -254,21 +348,7 @@ async function applyPending(
   // schema a newer release has already moved on from.
   const shipped = new Set(migrations.map((migration) => migration.version));
   const unknown = [...applied.keys()].filter((version) => !shipped.has(version)).sort();
-  if (unknown.length > 0) {
-    if (!allowNewerSchema) {
-      throw new MigrationError(
-        `The database records migration(s) this release does not ship: ${unknown.join(', ')}. ` +
-          'It was migrated by a newer release, and this code was not written for that schema.',
-        'Deploy the release that matches the database, or restore the pre-upgrade backup ' +
-          '(docs/runbooks/postgres-backup-restore.md §6.4). To run this release against the newer ' +
-          'schema anyway — an explicit rollback decision — set DATABASE_ALLOW_NEWER_SCHEMA=true.',
-      );
-    }
-    log(
-      `WARNING: running against a newer schema (DATABASE_ALLOW_NEWER_SCHEMA): ` +
-        `this release does not ship ${unknown.join(', ')}`,
-    );
-  }
+  await checkNewerSchema(client, unknown, allowNewerSchema, log);
 
   const report: MigrationReport = {
     applied: [],
@@ -294,10 +374,10 @@ async function applyPending(
     await client.query('BEGIN');
     try {
       await client.query(migration.sql);
-      await client.query('INSERT INTO schema_migrations (version, checksum) VALUES ($1, $2)', [
-        migration.version,
-        migration.checksum,
-      ]);
+      await client.query(
+        'INSERT INTO schema_migrations (version, checksum, older_code_runs) VALUES ($1, $2, $3)',
+        [migration.version, migration.checksum, olderCodeRuns(migration)],
+      );
       await client.query('COMMIT');
     } catch (cause) {
       await client.query('ROLLBACK').catch(() => undefined);
@@ -310,10 +390,26 @@ async function applyPending(
     log(`applied ${migration.version}`);
   }
 
+  // Rows applied before the column existed learn their class from this
+  // release, so the next release to roll back past them can read it.
+  const known = migrations.filter((migration) => migration.rollback !== null);
+  if (report.skipped.length > 0 && known.length > 0) {
+    await client.query(
+      `UPDATE schema_migrations AS m SET older_code_runs = c.runs
+         FROM unnest($1::text[], $2::boolean[]) AS c(version, runs)
+        WHERE m.version = c.version AND m.older_code_runs IS NULL`,
+      [known.map((migration) => migration.version), known.map(olderCodeRuns)],
+    );
+  }
+
   const started = await client.query<{ started_at: Date | string | null }>(
     'SELECT min(applied_at) AS started_at FROM schema_migrations',
   );
   const startedAt = started.rows[0]?.started_at;
   report.ledgerStartedAt = startedAt === null || startedAt === undefined ? null : new Date(startedAt);
   return report;
+}
+
+function olderCodeRuns(migration: Migration): boolean | null {
+  return migration.rollback === null ? null : migration.rollback === 'older-code-runs';
 }
