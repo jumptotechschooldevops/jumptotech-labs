@@ -11,6 +11,7 @@
 import { useState } from 'react';
 import { useAuth } from '../lib/AuthContext';
 import { displayNameFor } from '../lib/auth';
+import { hrefFor } from '../lib/router';
 
 export function UserMenu() {
   const auth = useAuth();
@@ -23,9 +24,9 @@ export function UserMenu() {
 
   return (
     <div className="user-menu">
-      <span className="user-menu__identity" title={identity.email ?? identity.subject}>
+      <a className="user-menu__identity" href={hrefFor({ name: 'account' })} title={identity.email ?? identity.subject}>
         {name}
-      </span>
+      </a>
 
       {identity.role !== 'STUDENT' ? (
         <span className="user-menu__role">{identity.role}</span>

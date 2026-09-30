@@ -44,6 +44,12 @@ export const apiMock = {
   listLearningPaths: vi.fn(),
   getLearningPath: vi.fn(),
   getLearningPathProgress: vi.fn(),
+  getBilling: vi.fn(),
+  startCheckout: vi.fn(),
+  openBillingPortal: vi.fn(),
+  getTestCheckout: vi.fn(),
+  completeTestCheckout: vi.fn(),
+  simulateSubscription: vi.fn(),
   classroom: {
     overview: vi.fn(),
     session: vi.fn(),
@@ -72,4 +78,8 @@ export function resetApiMock() {
   apiMock.listLearningPaths.mockResolvedValue({ learningPaths: [learningPathDetail()], count: 1 });
   apiMock.getLearningPath.mockResolvedValue({ learningPath: learningPathDetail() });
   apiMock.getLearningPathProgress.mockResolvedValue(learningPathProgress());
+  apiMock.getBilling.mockResolvedValue({
+    billing: { enabled: false, offers: [], subscription: null, canManageBilling: false, canSubscribe: false },
+    legal: { termsUrl: null, privacyUrl: null, refundUrl: null },
+  });
 }

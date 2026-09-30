@@ -21,6 +21,7 @@ import { ActiveSessionProvider } from './lib/ActiveSessionContext';
 import { AuthProvider } from './lib/AuthContext';
 import { CatalogProvider } from './lib/CatalogContext';
 import { hrefFor, usePageTitle, useRoute, type Route } from './lib/router';
+import { AccountPage, TestCheckoutPage, TestPortalPage } from './pages/AccountPage';
 import { CatalogPage } from './pages/CatalogPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { HelpPage } from './pages/HelpPage';
@@ -100,6 +101,12 @@ function Page({ route, navigation }: { route: Route; navigation: number }) {
       return <LearningStagePage key={`${route.pathId}/${route.stageId}`} pathId={route.pathId} stageId={route.stageId} />;
     case 'progress':
       return <ProgressPage />;
+    case 'account':
+      return <AccountPage key={route.checkout ?? 'account'} {...(route.checkout ? { checkout: route.checkout } : {})} />;
+    case 'testCheckout':
+      return <TestCheckoutPage key={route.checkoutRef} checkoutRef={route.checkoutRef} />;
+    case 'testPortal':
+      return <TestPortalPage />;
     case 'help':
       return <HelpPage />;
     case 'classroom':

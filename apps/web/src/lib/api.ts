@@ -1,5 +1,9 @@
 import type {
+  BillingOffer,
+  BillingView,
   LabAccess,
+  LegalLinks,
+  TestSubscriptionAction,
   ApiEnvelope,
   ApiError,
   AttemptDetail,
@@ -204,6 +208,33 @@ export const api = {
   getAccess: () => request<{ access: LabAccess }>('/api/me/access'),
 
   getProgress: () => request<ProgressSnapshot>('/api/me/progress'),
+
+  /*
+   * Billing (docs/billing.md). The account is always the one signed in: the
+   * only thing a checkout names is an offer. Starting one grants nothing —
+   * the provider's verified webhook does.
+   */
+  getBilling: () => request<{ billing: BillingView; legal: LegalLinks }>('/api/billing'),
+
+  startCheckout: (offerId: string) =>
+    request<{ url: string }>('/api/billing/checkout', { method: 'POST', body: JSON.stringify({ offerId }) }),
+
+  openBillingPortal: () => request<{ url: string }>('/api/billing/portal', { method: 'POST' }),
+
+  /** Test provider only: the simulated checkout and portal. */
+  getTestCheckout: (checkoutRef: string) =>
+    request<{ mode: 'test'; checkout: { offer: BillingOffer; status: 'open' | 'completed' } }>(
+      `/api/billing/test/checkouts/${encodeURIComponent(checkoutRef)}`,
+    ),
+
+  completeTestCheckout: (checkoutRef: string) =>
+    request<{ mode: 'test'; outcomes: string[] }>(
+      `/api/billing/test/checkouts/${encodeURIComponent(checkoutRef)}/complete`,
+      { method: 'POST' },
+    ),
+
+  simulateSubscription: (action: TestSubscriptionAction) =>
+    request<{ mode: 'test'; outcomes: string[] }>(`/api/billing/test/subscription/${action}`, { method: 'POST' }),
 
   listAttempts: (limit?: number) =>
     request<{ student: StudentIdentity; attempts: AttemptSummary[]; count: number }>(

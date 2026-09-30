@@ -230,6 +230,15 @@ export class PostgresBillingStore implements BillingStore {
     );
   }
 
+  async countCheckoutsSince(provider: string, userId: string, sinceIso: string): Promise<number> {
+    if (!UUID.test(userId)) return 0;
+    const { rows } = await this.db.query<{ n: string }>(
+      'SELECT count(*) AS n FROM billing_checkouts WHERE provider = $1 AND user_id = $2 AND created_at >= $3',
+      [provider, userId, sinceIso],
+    );
+    return Number(rows[0]?.n ?? 0);
+  }
+
   async customerOf(provider: string, userId: string): Promise<string | null> {
     if (!UUID.test(userId)) return null;
     const { rows } = await this.db.query<{ customer_ref: string }>(

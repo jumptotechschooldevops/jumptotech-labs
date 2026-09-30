@@ -55,6 +55,8 @@ export interface BillingTx {
 export interface BillingStore {
   transaction<T>(work: (tx: BillingTx) => Promise<T>): Promise<T>;
   recordCheckout(checkout: Omit<StoredCheckout, 'completedAt'>): Promise<void>;
+  /** Checkouts this account started since an instant: the per-account bound on starting them. */
+  countCheckoutsSince(provider: string, userId: string, sinceIso: string): Promise<number>;
   customerOf(provider: string, userId: string): Promise<string | null>;
   subscriptionsOf(userId: string): Promise<StoredSubscription[]>;
   /** Every subscription, newest first, bounded — reconciliation and `billing list`. */
@@ -157,6 +159,12 @@ export class InMemoryBillingStore implements BillingStore {
 
   async recordCheckout(checkout: Omit<StoredCheckout, 'completedAt'>): Promise<void> {
     this.#checkouts.set(InMemoryBillingStore.#key(checkout.provider, checkout.checkoutRef), { ...checkout, completedAt: null });
+  }
+
+  async countCheckoutsSince(provider: string, userId: string, sinceIso: string): Promise<number> {
+    return [...this.#checkouts.values()].filter(
+      (c) => c.provider === provider && c.userId === userId && Date.parse(c.createdAt) >= Date.parse(sinceIso),
+    ).length;
   }
 
   async customerOf(provider: string, userId: string): Promise<string | null> {

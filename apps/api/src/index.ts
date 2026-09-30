@@ -51,6 +51,7 @@ import { PlanCatalog } from './access/plans.js';
 import { PostgresAccessStore } from './access/postgres-store.js';
 import { PostgresBillingStore } from './billing/postgres-store.js';
 import { BillingProcessor } from './billing/processor.js';
+import { BillingService } from './billing/service.js';
 import { InMemoryBillingStore, type BillingStore } from './billing/store.js';
 import { TestBillingProvider } from './billing/test-provider.js';
 
@@ -260,7 +261,9 @@ async function main(): Promise<void> {
    * the only provider and is refused under production by the config loader.
    * Its state lives beside the entitlements it changes, in one transaction.
    */
-  let billing: { processor: BillingProcessor; provider: TestBillingProvider; store: BillingStore } | undefined;
+  let billing:
+    | { processor: BillingProcessor; provider: TestBillingProvider; store: BillingStore; service: BillingService }
+    | undefined;
   if (config.billing) {
     const provider = new TestBillingProvider({
       webhookSecret: config.billing.webhookSecret,
@@ -270,15 +273,28 @@ async function main(): Promise<void> {
       accessStore instanceof PostgresAccessStore && learning.database
         ? new PostgresBillingStore(learning.database, accessStore)
         : new InMemoryBillingStore(accessStore);
+    const processor = new BillingProcessor({
+      provider,
+      store,
+      offers: config.billing.offers,
+      plans: accessPlans,
+      policy: config.billing.policy,
+      logger,
+      ...(metrics.billing ? { metrics: metrics.billing } : {}),
+    });
     billing = {
       provider,
       store,
-      processor: new BillingProcessor({
+      processor,
+      service: new BillingService({
         provider,
         store,
+        processor,
+        access: accessStore,
         offers: config.billing.offers,
         plans: accessPlans,
         policy: config.billing.policy,
+        appUrl: config.publicOrigin ?? config.allowedOrigins[0] ?? 'http://localhost:3000',
         logger,
         ...(metrics.billing ? { metrics: metrics.billing } : {}),
       }),

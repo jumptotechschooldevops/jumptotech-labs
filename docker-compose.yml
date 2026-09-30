@@ -245,6 +245,11 @@ services:
       ACCESS_PLANS_JSON: ${ACCESS_PLANS_JSON:-}
       TRIAL_DURATION_DAYS: ${TRIAL_DURATION_DAYS:-}
       TRIAL_PLAN: ${TRIAL_PLAN:-}
+      # Published legal documents, linked from the account page (docs/billing.md
+      # §7). Links only: the platform writes none of them. Empty: none shown.
+      LEGAL_TERMS_URL: ${LEGAL_TERMS_URL:-}
+      LEGAL_PRIVACY_URL: ${LEGAL_PRIVACY_URL:-}
+      LEGAL_REFUND_URL: ${LEGAL_REFUND_URL:-}
       CLEANUP_INTERVAL_SECONDS: ${CLEANUP_INTERVAL_SECONDS:-60}
       SESSION_RETENTION_MINUTES: ${SESSION_RETENTION_MINUTES:-15}
       # The operator socket (apps/api/src/operator.ts): `ops status`, `ops
