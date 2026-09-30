@@ -51,7 +51,7 @@ import {
   pausableSocket,
   type OutputFlow,
 } from '@jumptotech/lab-orchestrator/output-flow';
-import { reportSessionActivity } from './activity.js';
+import { AUTHORITY_REFUSALS, ActivityRefusedError, reportSessionActivity } from './activity.js';
 import { SessionWorkspaces, WorkspacePathError } from './workspace.js';
 import {
   ShellIdentityError,
@@ -156,6 +156,10 @@ const PLATFORM_WORDED_CODES = new Set([
   'BROKER_PROTOCOL',
   'CAPACITY',
 ]);
+
+/** The API's refusal for a token whose browser sign-in has ended (apps/api/src/routes/internal.ts). */
+const SIGN_IN_ENDED = 'AUTH_SESSION_ENDED';
+const SIGN_IN_ENDED_MESSAGE = 'The sign-in this terminal was opened under has ended.';
 
 function browserMessage(code: string, message: string, phase: 'credentials' | 'shell'): string {
   if (PLATFORM_WORDED_CODES.has(code)) return phase === 'shell' ? `Could not start a shell: ${message}` : message;
@@ -568,6 +572,7 @@ export function createTerminalServer(
         // reattach after a container reset must be as authorised as the first
         // connection was.
         ownerUserId: session.claims.uid,
+        authSession: session.claims.asid,
       });
       if (context.kind !== 'container-exec') return false;
       if (!config.sandboxBrokerEnabled && !config.containerExecEnabled) return false;
@@ -985,7 +990,7 @@ export function createTerminalServer(
           // `ping` is the browser's keep-alive: counting either would let an
           // open tab keep an abandoned sandbox alive, the thing status polling
           // is kept out of activity to prevent.
-          reportActivity(session);
+          reportActivity(ws, session);
           session.term.write(message.data);
           inputFlows.get(ws)?.afterSend();
           break;
@@ -1157,6 +1162,7 @@ export function createTerminalServer(
         // From the token this service just verified. The socket never supplied
         // it and cannot influence it.
         ownerUserId: claims.uid,
+        authSession: claims.asid,
       });
 
       const planOptions = planOptionsFor(claims.labId);
@@ -1244,6 +1250,14 @@ export function createTerminalServer(
       });
       releaseClaim();
       await discardCredentials();
+      if (code === SIGN_IN_ENDED) {
+        // The token's sign-in has ended: to the browser that is an expired
+        // token, which it answers by asking for a fresh one — and that request
+        // is where a signed-out browser is sent to sign in again.
+        send(ws, { type: 'error', code: 'UNAUTHORIZED', message: SIGN_IN_ENDED_MESSAGE });
+        ws.close(4401, 'unauthorized');
+        return false;
+      }
       send(ws, { type: 'error', code, message: browserMessage(code, msg, 'credentials') });
       ws.close(4403, 'no credentials');
       return false;
@@ -1420,7 +1434,7 @@ export function createTerminalServer(
    * Fire-and-forget. A missed report costs at most one window of idle budget;
    * failing the keystroke would cost the student their shell.
    */
-  function reportActivity(session: Session): void {
+  function reportActivity(ws: WebSocket, session: Session): void {
     const now = Date.now();
     if (
       session.activityReportedAt !== undefined &&
@@ -1437,9 +1451,39 @@ export function createTerminalServer(
       // Both from the token verified at `auth`; the frame supplies neither.
       sessionId,
       ownerUserId: session.claims.uid,
+      authSession: session.claims.asid,
     }).catch((error: unknown) => {
+      if (error instanceof ActivityRefusedError && error.code && AUTHORITY_REFUSALS.has(error.code)) {
+        revoke(ws, session, error.code);
+        return;
+      }
       log(`session ${sessionId}: activity report failed — ${describeError(error)}`, 'terminal.activity.report_failed', 'warn');
     });
+  }
+
+  /**
+   * Close an open terminal whose authority has ended.
+   *
+   * The token was checked when the socket attached; the shell then lived for
+   * as long as the socket did. Signing out, `ops sign-out`, and suspending or
+   * revoking lab access all refused every *new* attach but left an open shell
+   * running for as long as somebody kept typing into it. The activity report is
+   * the check that runs while the student works, so its refusal ends the
+   * socket, with the answer a new attach would get. Only a refusal: an API
+   * that could not answer says nothing about the socket, and never costs a
+   * student their shell.
+   */
+  function revoke(ws: WebSocket, session: Session, code: string): void {
+    if (sessions.get(ws) !== session) return; // already closed, or replaced by a newer attach
+    obs.warn('terminal.connection.closed', { sessionId: session.claims.sid, outcome: 'revoked', code });
+    const signedOut = code === SIGN_IN_ENDED;
+    send(ws, {
+      type: 'error',
+      code: signedOut ? 'UNAUTHORIZED' : code,
+      message: signedOut ? SIGN_IN_ENDED_MESSAGE : 'This terminal no longer has access to the lab.',
+    });
+    endSession(ws);
+    if (ws.readyState === ws.OPEN) ws.close(signedOut ? 4401 : 4403, signedOut ? 'unauthorized' : 'access ended');
   }
 
   function closeFor(ws: WebSocket, code: string, message: string): void {

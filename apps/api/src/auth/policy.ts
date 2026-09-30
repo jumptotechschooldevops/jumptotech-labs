@@ -80,7 +80,7 @@ const OWNED_ACTIONS: readonly Action[] = [
  * nothing more. It may not attach a terminal, reset, or end another person's
  * lab: that is taking control of someone's work, and a support tool that can do
  * it silently needs a consent and audit design this story does not have. See
- * `docs/authorization.md`.
+ * `docs/runbooks/instructor-guide.md` and `docs/commercial-access.md` §1.
  */
 const CROSS_USER_SESSION_ACTIONS: Record<Role, readonly Action[]> = {
   STUDENT: [],

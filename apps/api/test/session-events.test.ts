@@ -151,6 +151,22 @@ describe('recording', () => {
     expect(JSON.stringify(await events.listForSession(sessionId, 50))).not.toContain('172.18.0.5');
   });
 
+  it('an End the runtime cannot finish tells the student it is still shutting down; the provider’s code stays in the event', async () => {
+    const { app, events, k8s } = harness();
+    const sessionId = await startLab(app, 'K8S-001', 'bea');
+    k8s.unreachable = RAW;
+
+    const end = await request(app).delete(`/api/sessions/${sessionId}`).set('Authorization', as('bea'));
+    expect(end.status).toBe(503);
+    // Not the provider's ENVIRONMENT_UNREACHABLE: the web reads that code as a
+    // Verify failure and tells a student who pressed End to "Try Verify again".
+    expect(end.body.error.code).toBe('DESTROY_FAILED');
+    expect(JSON.stringify(end.body)).not.toContain('172.18.0.5');
+
+    const [latest] = await events.listForSession(sessionId, 1);
+    expect(latest).toMatchObject({ operation: 'end', outcome: 'pending', code: 'ENVIRONMENT_UNREACHABLE' });
+  });
+
   it('a Start the runtime breaks is `failed` against its session; the provider’s words are not stored', async () => {
     const { app, events, runtime } = harness();
     runtime.failCreate = RAW;

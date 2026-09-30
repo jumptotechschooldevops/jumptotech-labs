@@ -77,6 +77,9 @@ export function HintPanel({ hints, onReveal, alreadyRevealed = 0 }: HintPanelPro
     <section className="brief__section hints" aria-label="Hints">
       <h2 className="brief__heading">
         Hints
+        {/* JSX drops the line break, so without a separator a screen reader
+            reads the heading as "Hints1 of 3". */}
+        <span className="visually-hidden">: </span>
         <span className="hints__count">
           {revealed} of {hints.length}
         </span>
@@ -111,6 +114,8 @@ export function HintPanel({ hints, onReveal, alreadyRevealed = 0 }: HintPanelPro
         <button type="button" className="btn btn--ghost hints__reveal" onClick={revealNext}>
           {revealed === 0 ? 'Show a hint' : `Show hint ${revealed + 1}`}
           <span className="hints__remaining">
+            {/* Read as "Show hint 2, 1 left", not "Show hint 21 left". */}
+            <span className="visually-hidden">, </span>
             {remaining} left
           </span>
         </button>

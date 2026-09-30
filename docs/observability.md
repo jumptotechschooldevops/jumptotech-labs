@@ -249,9 +249,14 @@ make observability-down
 > On a machine where another project already binds 9090 or 3001, set
 > `PROMETHEUS_PORT` / `GRAFANA_PORT` in `.env`.
 
-Alertmanager's receiver is a **webhook stub**. Where alerts actually go is a
-deployment decision; this story's job was to produce correct, actionable alerts,
-not to choose whose phone rings.
+Alertmanager reads its destinations from two git-ignored files the operator
+installs: `infrastructure/observability/alertmanager/secrets/webhook-url` (every
+alert) and `heartbeat-url` (the always-firing `Watchdog`, sent every five
+minutes to an external check-in service that tells a person when the posts stop;
+[RB-20](runbooks/RB-20-watchdog.md)). Until they exist, notifications fail and
+are only logged, and the production preflight reports each as `MANUAL CHECK
+REQUIRED`, not FAIL. Where alerts go, and who is told, is a deployment decision
+([private-beta-deployment.md §2.5](runbooks/private-beta-deployment.md)).
 
 ---
 
@@ -399,6 +404,7 @@ the operator question each answers are in [beta-slo-indicators.md](beta-slo-indi
 | `HostMemoryPressure` / `…Critical` | warning / critical | < 10% / < 5% available | |
 | `HostDiskSpaceLow` / `…Critical` | warning / critical | < 15% / < 8% free | |
 | `HostCpuSaturated` | warning | load5 > 2 × CPUs, 15 m | |
+| `ProcessFileDescriptorsHigh` | warning | > 1000 open, 15 m | `nofile` is 1,048,576, so a ratio never fires; ~30 idle and 51 at a five-student class's peak (2026-09-28 drill) |
 
 Two defects were fixed on the way, both of the IE-3 kind (a counting window no
 longer than its `for:`): `CapacityExhausted` never fired on a single refusal,

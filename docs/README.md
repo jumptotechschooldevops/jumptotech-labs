@@ -73,7 +73,9 @@ fails the build for one that does not:
 | a new host: prerequisites, preflight, deployment, smoke, upgrade, rollback | [development/production-host-readiness.md](development/production-host-readiness.md) |
 | the private beta on one host, in order: sizing, external setup, secrets, commands, validation, go-live checklist, stop conditions | [runbooks/private-beta-deployment.md](runbooks/private-beta-deployment.md) |
 | running the beta day to day; `prod` and the helpers | [runbooks/private-beta-operations.md](runbooks/private-beta-operations.md) |
+| adding, removing and protecting student accounts: sign-in, access, sign-out, a stolen session, emergency revoke | [runbooks/identity-and-access.md](runbooks/identity-and-access.md) |
 | teaching a class: the classroom view, what to check when a student is stuck, P0–P3, when to escalate | [runbooks/instructor-guide.md](runbooks/instructor-guide.md) |
+| the first five-student class, in order: the day before, 30 and 5 minutes before, what students say during class, after class | [runbooks/first-class.md](runbooks/first-class.md) |
 | incidents A–U, by what you see | [runbooks/private-beta-incident-response.md](runbooks/private-beta-incident-response.md) |
 | what fails, what students see, what recovers by itself: failure domains, journeys, failure matrix, measured RPO/RTO, restart order, retention | [reliability-failure-model.md](reliability-failure-model.md) |
 | running an incident: severity, roles, status and class messages, the postmortem template | [runbooks/incident-management.md](runbooks/incident-management.md) |
@@ -86,7 +88,8 @@ fails the build for one that does not:
 | capacity probes: measuring what the host holds | [development/capacity-probes.md](development/capacity-probes.md) |
 | diagnostics underneath the runbooks: request tracing, health endpoints | [incident-troubleshooting.md](incident-troubleshooting.md) |
 | rehearsed failures | [incident-exercises.md](incident-exercises.md) |
-| the private-beta release decision and its conditions | [releases/private-beta-release-gate.md](releases/private-beta-release-gate.md) |
+| what remains before each release — five-student beta, paid students, public — with status, evidence and owner per row | [releases/release-checklist.md](releases/release-checklist.md) |
+| the private-beta release decision's history: the 2026-09-15 gate and its dated re-validations | [releases/private-beta-release-gate.md](releases/private-beta-release-gate.md) |
 | what a deployment must record | [releases/production-host-evidence-template.md](releases/production-host-evidence-template.md) |
 | who may use labs: entitlements, plans, trials, the `ops access` commands | [commercial-access.md](commercial-access.md) |
 | billing: the provider boundary, verified webhooks, the subscription lifecycle (test mode only) | [billing.md](billing.md) |
@@ -142,12 +145,17 @@ Dated; not maintained after their pass. Newest first within each group.
 
 | Record | Date |
 |---|---|
+| [releases/overnight-final-validation-2026-09-29.md](releases/overnight-final-validation-2026-09-29.md) | 2026-09-29 |
+| [releases/final-launch-readiness-2026-09-28.md](releases/final-launch-readiness-2026-09-28.md) | 2026-09-28 |
+| [releases/observability-incident-audit-2026-09-28.md](releases/observability-incident-audit-2026-09-28.md) | 2026-09-28 |
 | [releases/student-experience-audit-2026-09-28.md](releases/student-experience-audit-2026-09-28.md) | 2026-09-28 |
+| [releases/auth-identity-audit-2026-09-28.md](releases/auth-identity-audit-2026-09-28.md) | 2026-09-28 |
 | [releases/lab-certification-2026-09-27.md](releases/lab-certification-2026-09-27.md) | 2026-09-27 |
 | [security/redteam-wave2-2026-09-27.md](security/redteam-wave2-2026-09-27.md) | 2026-09-27 |
 | [security/redteam-audit-2026-09-27.md](security/redteam-audit-2026-09-27.md) | 2026-09-27 |
 | [releases/performance-capacity-certification-2026-09-27.md](releases/performance-capacity-certification-2026-09-27.md) | 2026-09-27 |
 | [releases/reliability-dr-audit-2026-09-28.md](releases/reliability-dr-audit-2026-09-28.md) | 2026-09-28 |
+| [releases/dr-certification-2026-09-28.md](releases/dr-certification-2026-09-28.md) | 2026-09-28 |
 | [releases/launch-readiness-20h-report.md](releases/launch-readiness-20h-report.md) | 2026-09-27 |
 | [releases/app-security-multi-tenant-audit.md](releases/app-security-multi-tenant-audit.md) | 2026-09-27 |
 | [releases/overnight-disaster-recovery-audit.md](releases/overnight-disaster-recovery-audit.md) | 2026-09-21/22 |
@@ -172,6 +180,7 @@ Dated; not maintained after their pass. Newest first within each group.
 | [development/catalog-quality-audit.md](development/catalog-quality-audit.md) | 2026-09-16 |
 | [development/private-beta-security-audit.md](development/private-beta-security-audit.md) | 2026-09-16 |
 
-`releases/private-beta-release-gate.md` is both: its current verdict and
-conditions are authoritative, and its later numbered sections are dated records
-of each re-validation.
+`releases/private-beta-release-gate.md` is both: its conditions are
+authoritative, and its later numbered sections are dated records of each
+re-validation. The current verdict for each release is
+`releases/release-checklist.md`.

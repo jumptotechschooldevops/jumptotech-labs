@@ -25,7 +25,9 @@ browser tests plus 1 guard test that starts no browser.
   The runtime is real, but only for the Linux provider.
 - **Tier C** (production host): **NOT PROVEN.** Nothing here ran on a host,
   domain, TLS edge or real identity provider.
-- **CI:** the `browser-e2e` job is configured, but has **never executed**.
+- **CI:** at the date above, the `browser-e2e` job was configured but had
+  **never executed**. It has since run on every PR and push to `main`, beside
+  the `browser-ux` job (§19); both passed on `main` at `74ea285`.
 
 The branch is test and CI work plus **one product fix** found by the suite:
 the terminal service told a client that had sent its token on time "No

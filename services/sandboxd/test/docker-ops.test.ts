@@ -477,6 +477,48 @@ describe('cleanup removes only owned managed sandboxes', () => {
     ]);
   });
 
+  it('reports a data volume it could not remove, and still finishes the teardown', async () => {
+    /*
+     * Nothing retries this volume: the provider's own removeVolume on the host
+     * engine is a no-op, and a later teardown finds no container and stops.
+     * A failure used to be swallowed without a line or a count, so a disk
+     * filling with orphaned daemon image stores had no cause anyone could see.
+     */
+    const fake = fakeEngines({ [refFor(SESSION_A)]: sandboxSnapshot(SESSION_A) });
+    (fake.engines.host as unknown as { removeVolume: () => Promise<void> }).removeVolume = async () => {
+      throw new Error('Error response from daemon: remove jtt-sbx-data: volume is in use');
+    };
+    const leaks: Array<{ sessionId: string; sandboxRef: string; volume: string }> = [];
+    const ops = new DockerOps({
+      engines: fake.engines,
+      derivationSecret: SECRET,
+      runtimeOwner: OWNER,
+      policy: POLICY,
+      onVolumeLeak: ({ sessionId, sandboxRef, volume }) => leaks.push({ sessionId, sandboxRef, volume }),
+    });
+    await expect(ops.run('removeSandbox', { sessionId: SESSION_A })).resolves.toEqual({ removed: true });
+    expect(leaks).toEqual([
+      { sessionId: SESSION_A, sandboxRef: refFor(SESSION_A), volume: `${refFor(SESSION_A)}-data` },
+    ]);
+  });
+
+  it('never lets a failing reporter fail a finished teardown', async () => {
+    const fake = fakeEngines({ [refFor(SESSION_A)]: sandboxSnapshot(SESSION_A) });
+    (fake.engines.host as unknown as { removeVolume: () => Promise<void> }).removeVolume = async () => {
+      throw new Error('daemon timeout');
+    };
+    const ops = new DockerOps({
+      engines: fake.engines,
+      derivationSecret: SECRET,
+      runtimeOwner: OWNER,
+      policy: POLICY,
+      onVolumeLeak: () => {
+        throw new Error('logger broke');
+      },
+    });
+    await expect(ops.run('removeSandbox', { sessionId: SESSION_A })).resolves.toEqual({ removed: true });
+  });
+
   it('does not remove a volume when it refused to remove the sandbox', async () => {
     const fake = fakeEngines({
       [refFor(SESSION_A)]: sandboxSnapshot(SESSION_A, {

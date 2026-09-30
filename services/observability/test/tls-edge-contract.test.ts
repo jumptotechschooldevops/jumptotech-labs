@@ -276,6 +276,18 @@ describe('nginx: the edge access log never records a query string', () => {
   it('adds no access_log to the shared locations, where it would override the servers', () => {
     expect(code(read('infrastructure/docker/nginx/locations.conf'))).not.toMatch(/access_log|log_format/);
   });
+
+  it('keeps the callback out of the error log too, which writes the whole request line', () => {
+    /*
+     * The error log has no format. 2026-09-28 observability drill, api stopped:
+     * `api could not be resolved … request: "GET /auth/callback?code=…&state=…"`.
+     * Upstream failures are logged at `error`; the /auth/ location logs `crit`.
+     */
+    const locations = code(read('infrastructure/docker/nginx/locations.conf'));
+    const auth = /^location \/auth\/ \{\n([\s\S]*?)^\}/m.exec(locations);
+    expect(auth, 'locations.conf has the /auth/ location').not.toBeNull();
+    expect(auth![1]).toMatch(/^\s+error_log \/var\/log\/nginx\/error\.log (?:crit|alert|emerg);$/m);
+  });
 });
 
 describe('the web image (web.Dockerfile)', () => {

@@ -480,7 +480,7 @@ export class FakePlatform {
       await this.gateFor('sessions');
       if (await this.failure(route, 'sessions')) return;
       const entries = this.liveSessions().map(({ session, labTitle, attempt }) => ({ session, labTitle, attempt }));
-      return this.ok(route, { sessions: entries, count: entries.length, limits: { maxActiveSessionsPerStudent: 1 } });
+      return this.ok(route, { sessions: entries, count: entries.length, limits: { maxActiveSessionsPerStudent: 1, maxSessionMinutes: 60, idleTimeoutMinutes: 20 } });
     }
     const startMatch = /^\/api\/labs\/([A-Z0-9-]+)\/start$/.exec(path);
     if (startMatch && method === 'POST') {

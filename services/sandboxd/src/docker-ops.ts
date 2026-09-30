@@ -157,6 +157,15 @@ export interface DockerOpsOptions {
   derivationSecret: string;
   runtimeOwner: string;
   policy: DockerSandboxPolicy;
+  /**
+   * A sandbox's named data volume could not be removed.
+   *
+   * Nothing else ever removes it — the provider's own `removeVolume` on the
+   * host engine is a deliberate no-op (broker-engines.ts), and a later teardown
+   * finds no container and stops — so this is the only moment the leak can be
+   * seen. Each volume holds a whole inner daemon's image store.
+   */
+  onVolumeLeak?: (leak: { sessionId: string; sandboxRef: string; volume: string; error: unknown }) => void;
 }
 
 /**
@@ -184,12 +193,27 @@ export class DockerOps {
   readonly #derivationSecret: string;
   readonly #runtimeOwner: string;
   readonly #policy: DockerSandboxPolicy;
+  readonly #onVolumeLeak: NonNullable<DockerOpsOptions['onVolumeLeak']>;
 
   constructor(options: DockerOpsOptions) {
     this.#engines = options.engines;
     this.#derivationSecret = options.derivationSecret;
     this.#runtimeOwner = options.runtimeOwner;
     this.#policy = options.policy;
+    this.#onVolumeLeak = options.onVolumeLeak ?? (() => undefined);
+  }
+
+  /** Remove a sandbox's data volume; a failure is reported, never thrown. */
+  async #removeDataVolume(sessionId: string, sandboxRef: string, volume: string): Promise<void> {
+    try {
+      await this.#engines.host.removeVolume(volume, true);
+    } catch (error) {
+      try {
+        this.#onVolumeLeak({ sessionId, sandboxRef, volume, error });
+      } catch {
+        // Reporting must never turn a finished teardown into a failed one.
+      }
+    }
   }
 
   /**
@@ -340,7 +364,7 @@ export class DockerOps {
          * each one holds a whole inner daemon's image store.
          */
         const discardVolume = async (error: unknown): Promise<never> => {
-          await this.#engines.host.removeVolume(volume, true).catch(() => undefined);
+          await this.#removeDataVolume(sessionId, ref, volume);
           throw error;
         };
 
@@ -409,9 +433,13 @@ export class DockerOps {
          *
          * Derived from the sandbox name, so it is as session-scoped as the
          * container was, and a failure here is not fatal: the container is
-         * already gone and the reaper re-enters teardown.
+         * already gone. It is not retried either — a later teardown finds no
+         * container and stops here — so it is reported rather than swallowed:
+         * `sandbox.remove.failed` names the volume, and
+         * `jtt_sandboxd_docker_ops_total{op="removeSandbox",outcome="volume_leaked"}`
+         * counts it (RB-05).
          */
-        await this.#engines.host.removeVolume(`${ref}-data`, true).catch(() => undefined);
+        await this.#removeDataVolume(String(payload.sessionId), ref, `${ref}-data`);
         return { removed: true };
       }
 

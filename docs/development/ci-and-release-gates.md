@@ -23,7 +23,7 @@ Two workflows run on every pull request (any target branch for Quality gates,
   image builds. It is not daemon-free: where promtool and amtool are not
   installed, the observability step runs them as containers on the runner's
   Docker daemon (`scripts/check-observability.sh`).
-- **Nine runtime jobs** each get a fresh runner: their own Docker daemon, kind
+- **Nine runtime jobs and two browser jobs** (`browser-ux`, `browser-e2e`) each get a fresh runner: their own Docker daemon, kind
   cluster and image store, torn down afterwards. Every object they create is
   named after a run-scoped `RUNTIME_OWNER_ID` / `JTT_TEST_RUN_ID`, and every
   cleanup filters on it.
@@ -48,12 +48,14 @@ Two workflows run on every pull request (any target branch for Quality gates,
 
 ### Enforcement: not configured
 
-`main` has **no branch protection and no required status checks** (checked
-2026-09-19: `GET /repos/…/branches/main/protection` → 404). A red or missing run
+`main` has **no branch protection, no rulesets and no required status checks**
+(re-checked 2026-09-28: `GET /repos/…/branches/main/protection` → 404,
+`GET /repos/…/rulesets` → `[]`). A red or missing run
 does not stop a merge; only the reviewer does. That is a repository setting,
 not something a commit can change. **Operator action:** protect `main` and require
-the check names in §2 (`gates`, the nine runtime jobs, `Analyze
-(javascript-typescript)`, `Analyze (actions)`).
+the check names in §2 (`gates`, the nine runtime jobs, `browser-ux`,
+`browser-e2e`, `Analyze (javascript-typescript)`, `Analyze (actions)`). The
+command is in [release-checklist.md](../releases/release-checklist.md) (A-23).
 
 ---
 
@@ -92,6 +94,7 @@ with `npm ci` on the Node version in `.nvmrc`.
 | `terminal-integration` | the whole shell chain with a real PTY, in a container | `npm run cluster:up && make test-terminal-container` | Docker, kind | kubeconfig/cluster wiring |
 | `sandboxd-integration` | the broker's refusals against a real daemon and real PTYs | `make test-sandboxd-container` | Docker (the only job that mounts the socket) | broker scope refusal |
 | `tls-edge-integration` | the production TLS edge in the real web image: certificate gate, protocols, redirect, WebSocket, renewal | `make test-tls-edge` | Docker | nginx/openssl behaviour; test-only certificates |
+| `browser-ux` | the production web bundle against a fake platform: every student screen, error state and accessibility rule the UX suite covers, with no stack | `npm run test:e2e:ux` | Playwright Chromium | a UI change the suite pins |
 | `browser-e2e` | Chromium through sign-in, a learning path, a real LINUX-001 sandbox, terminal, Verify, progress, End lab, cross-student isolation | `npm run test:e2e` | Docker; Playwright Chromium | stack readiness; a UI flow |
 
 ### CodeQL — `Analyze (javascript-typescript)`, `Analyze (actions)`
@@ -182,8 +185,8 @@ A change is ready to merge when all of these hold. None of them needs a host.
 
 - [ ] The branch is based on the current `origin/main` (or reconciled with it),
       and its CI run is on that head.
-- [ ] Every Quality gates job is green on the PR run — `gates` and all nine
-      runtime jobs. A skipped job is not a green one.
+- [ ] Every Quality gates job is green on the PR run — `gates`, all nine
+      runtime jobs and both browser jobs. A skipped job is not a green one.
 - [ ] Both CodeQL analyses completed; no new high/critical alert is unexplained.
 - [ ] `npm ci` leaves `package-lock.json` unchanged; a lockfile diff is intended
       and named in the PR.

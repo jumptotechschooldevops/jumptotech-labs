@@ -24,6 +24,11 @@ in §7 must be made before students reach a hosted deployment.
 > is not a record. §11 is a separate, dated re-validation against the current
 > tree, and it says which of these gates have been re-run there and which have
 > not. Read §11 before treating §10's verdict as current.
+>
+> **The current status of every release condition** — for this beta, for paid
+> students and for a public release — is kept in
+> [release-checklist.md](release-checklist.md), row by row, with its evidence.
+> That page supersedes §10 as the current verdict; this file stays the record.
 
 ---
 
@@ -591,3 +596,17 @@ runbooks, and four alerts (`ScopeDenialDetected`, `SandboxLeakSuspected`,
 `TerminalPtyDrift`, alert delivery). New open decision: D15, bearer tokens on
 `/api/*`. **No production host exists; no gate in §13.2 moved.** Students may
 not be invited. (An unmerged branch also appends a §16; renumber on merge.)
+
+## 17. Final integration and launch pass — 2026-09-28
+
+`main` at `74ea285` (#62–#162 since §16); record:
+[final-launch-readiness-2026-09-28.md](final-launch-readiness-2026-09-28.md).
+Every report was reconciled against the code, and the record classifies each
+residual A–E. No class-A code defect was found. The one class-A finding was in
+the rollback runbooks: they called every migration additive, and 010 is not
+(fixed in #163). #156 was fixed and made mergeable; #145 and #155 are ready.
+All 117 labs remain certified on `74ea285`. **No production host exists.** The
+class-B list in the record's §5.B is the remaining gate: host, firewall, DNS,
+TLS, an IdP restricted to five, alert receivers, off-host backup, the on-host
+five-student and capacity runs, and branch protection on `main`. Students may
+not be invited until it is done.

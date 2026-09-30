@@ -194,9 +194,12 @@ function LaunchPanel({
   );
 }
 
+/** An estimate this close to the environment's time limit gets a warning rather than "a guide". */
+const NEAR_LIMIT_MINUTES = 10;
+
 export function LabDetailPage({ labId }: { labId: string }) {
   const catalog = useCatalog();
-  const { limit } = useActiveSession();
+  const { limit, timeLimits } = useActiveSession();
   const [lab, setLab] = useState<LabDetail | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
   const [nonce, setNonce] = useState(0);
@@ -312,12 +315,28 @@ export function LabDetailPage({ labId }: { labId: string }) {
               Good to know
             </h2>
             <ul className="plain-list">
-              <li>
-                The environment is temporary. It is deleted when you end the lab, after a period of inactivity, or when
-                its time limit is reached.
-              </li>
+              {timeLimits ? (
+                <li>
+                  The environment is temporary. It is deleted when you end the lab, after{' '}
+                  {formatMinutes(timeLimits.idleTimeoutMinutes)} without activity, or{' '}
+                  {formatMinutes(timeLimits.maxSessionMinutes)} after it starts, whichever comes first.
+                </li>
+              ) : (
+                <li>
+                  The environment is temporary. It is deleted when you end the lab, after a period of inactivity, or
+                  when its time limit is reached.
+                </li>
+              )}
               <li>Reset puts the environment back to its starting state. Your progress is kept.</li>
-              <li>The estimated time of {formatMinutes(lab.durationMinutes)} is a guide, not a deadline.</li>
+              {timeLimits && lab.durationMinutes >= timeLimits.maxSessionMinutes - NEAR_LIMIT_MINUTES ? (
+                <li>
+                  This lab usually takes about {formatMinutes(lab.durationMinutes)}, close to the{' '}
+                  {formatMinutes(timeLimits.maxSessionMinutes)} limit. Press Verify as you go: a lab you have passed
+                  stays completed when its environment closes.
+                </li>
+              ) : (
+                <li>The estimated time of {formatMinutes(lab.durationMinutes)} is a guide.</li>
+              )}
               {limit === 1 ? <li>You can run one lab at a time.</li> : null}
               {lab.hints.length > 0 ? (
                 <li>{plural(lab.hints.length, 'hint is', 'hints are')} available once the lab is running.</li>

@@ -52,6 +52,12 @@ export interface AuthSessionStore {
   create(userId: string, ttlSeconds: number): Promise<CreatedAuthSession>;
   /** Resolve a raw cookie value, or `null` if unknown or expired. */
   resolve(cookieValue: string): Promise<AuthSessionRecord | null>;
+  /**
+   * A live session by its *stored* id (the hash), or `null` if it was signed
+   * out, destroyed or has expired. For the terminal: a terminal token names the
+   * sign-in it was requested under by this id, never by the cookie.
+   */
+  findLive(authSessionId: string): Promise<AuthSessionRecord | null>;
   /** Sign out. Idempotent: destroying an unknown session is not an error. */
   destroy(cookieValue: string): Promise<boolean>;
   /** Sign out everywhere. Used when an account is disabled. */
@@ -141,6 +147,12 @@ export class InMemoryAuthSessionStore implements AuthSessionStore {
       this.#byHash.delete(record.authSessionId);
       return null;
     }
+    return record;
+  }
+
+  async findLive(authSessionId: string): Promise<AuthSessionRecord | null> {
+    const record = this.#byHash.get(authSessionId);
+    if (!record || Date.parse(record.expiresAt) <= this.#now()) return null;
     return record;
   }
 
@@ -235,6 +247,17 @@ export class PostgresAuthSessionStore implements AuthSessionStore {
          FROM auth_sessions
         WHERE auth_session_id = $1 AND expires_at > now()`,
       [hashAuthSessionId(cookieValue)],
+    );
+    return rows[0] ? toRecord(rows[0]) : null;
+  }
+
+  async findLive(authSessionId: string): Promise<AuthSessionRecord | null> {
+    if (!/^[0-9a-f]{64}$/.test(authSessionId)) return null;
+    const { rows } = await this.db.query<AuthSessionRow>(
+      `SELECT auth_session_id, user_id, created_at, expires_at
+         FROM auth_sessions
+        WHERE auth_session_id = $1 AND expires_at > now()`,
+      [authSessionId],
     );
     return rows[0] ? toRecord(rows[0]) : null;
   }

@@ -97,8 +97,14 @@ instead of trying the next step.
   q 'sum by (outcome) (increase(jtt_auth_callback_total[30m]))'   # the sign-in round trip
   q 'sum by (outcome) (increase(jtt_auth_attempts_total[30m]))'   # AUTH_UNAVAILABLE is the database
   prod logs --since 30m api | grep -E '"event":"authn\.failed"|"authorizationResult":"unauthenticated"' | tail -20
+  prod logs --since 30m api | grep '"event":"auth.callback.failed"' | tail -10   # why each callback failed
   q 'jtt_db_up'
   ```
+  An `auth.callback.failed` line names the step: an `AUTH_…` code is the
+  identity provider or the token; *"not an identity-provider error"* is the
+  user store, which is PostgreSQL (N). In the 2026-09-28 drill a loaded host
+  failed sign-ins with *Connection terminated due to connection timeout*, and
+  `OidcSignInFailures` fired without either being down.
 - **Likely component.** The identity provider, OIDC settings in `.env`, JWKS
   fetch, or PostgreSQL.
 - **Recovery.** Follow RB-14 using the callback `outcome`. If the database is
@@ -132,6 +138,7 @@ instead of trying the next step.
   | `provider_unavailable` | That track's substrate is down. `ops status` names the provider and why. The student is told the kind of lab is unavailable and other tracks may work | RB-09; container tracks RB-06; Kubernetes RB-18 first |
   | `provision_failed` | The substrate is up but creation failed | RB-03, E |
   | `platform_error` | The start failed before the substrate was asked, usually the database | N, then RB-11. The log line's `code` names it |
+  | `provision_failed` with *all predefined address pools have been fully subnetted* in the session's `session.transition` line | Docker cannot create another network. Networking and multi-container labs fail; single-container labs still start. Measured in the 2026-09-28 drill | Count `docker network ls`; list this deployment's with `--filter label=jumptotech.io/runtime-owner=$RUNTIME_OWNER_ID`. Remove only a network of an ended session that has no containers. Never `docker network prune`: it takes other stacks' networks too |
   | *(503 `LAB_LAUNCHES_PAUSED`)* | An operator paused launches (not counted as a failure) | RB-21 |
   | `unauthorized` | Not signed in | B |
 
@@ -139,7 +146,9 @@ instead of trying the next step.
 - **Stop when.** Starts fail for every track at once. That is not a lab
   problem: go to U.
 - **Evidence.** The `lab.start.failed` lines (they carry `labId`, `outcome`,
-  `code`), and the time.
+  `code` and the student's Support ID as `sessionId`), and the time. Follow one
+  by its `requestId` to the `session.transition` line with the provider's
+  reason, and to sandboxd's `sandbox.runtime.op` line for the same request.
 - **Follow-up.** If one lab fails repeatedly while the other labs on the same
   track start, file it as a content or image defect for that lab.
 
@@ -319,7 +328,16 @@ instead of trying the next step.
   listen, which is `health: starting` and is not a failure (operations §2.1).
   Read `prod logs --tail 100 api` for the `config.loaded` or startup error. A
   configuration refusal names the variable. Do not restart it again while it
-  is still starting: each restart starts the wait over.
+  is still starting: each restart starts the wait over. Measured on a laptop at
+  load 20 (2026-09-28): 8–14 minutes from restart to scraped, with
+  `ServiceDown{job="api"}` firing meanwhile. That page is expected after a
+  restart, and it resolves by itself.
+
+  **A burst of "resolved" notifications is not recovery.** When the api stops,
+  every alert it reports (`ProviderUnavailable`, `HostCpuSaturated`,
+  `ReaperSweepErrorsPersisting`, …) resolves at once, because its series
+  vanish. `ServiceDown{job="api"}` follows two minutes later. Read a burst of
+  resolutions as the reporter going away until `up{job="api"}` says otherwise.
 - **Evidence.** `prod logs --tail 200 api` from before the restart, or the
   diagnostics archive taken before it.
 - **Follow-up.** RB-01 and RB-11.
@@ -454,6 +472,14 @@ tracks) and the kind cluster (Kubernetes track).
 
 - **Symptom.** `docker` commands hang or error. `SandboxdRuntimeDown` fires, and
   container-track starts fail with `provider_unavailable`.
+
+  A broker or daemon that **hangs**, rather than stopping, looks different
+  (2026-09-28 drill, sandboxd paused). A Start spins for about five minutes and
+  fails with `SESSION_PROVISION_FAILED`, because the broker's own timeouts are
+  120 s per call. End takes two minutes, answers `DESTROY_FAILED` ("cleanup
+  keeps retrying") and the reaper finishes it after the broker answers again.
+  `ServiceDown{job="sandboxd"}` pages at about three minutes; `ReaperStalled`
+  is the same cause. Tell students to wait rather than press Start again.
 - **Commands.**
   ```bash
   timeout 10 docker info >/dev/null && echo ok
@@ -577,6 +603,19 @@ and the defects they found are in
 [beta-operations-2026-09-18.md](../development/beta-operations-2026-09-18.md).
 This proves the procedures work against the code. It does **not** prove
 anything about a production host's capacity, network or identity provider.
+
+On 2026-09-28 the observability audit ran ten bounded drills against a
+disposable stack (the E2E overlay: OIDC sign-in, capacity 5) with the
+repository's own Prometheus and Alertmanager configuration and a webhook sink
+as the receiver: api, terminal, sandboxd and PostgreSQL each stopped, sandboxd
+and PostgreSQL each **paused** (hung, not stopped), a start failure, a terminal
+attach with the api stalled, an End during a broker outage, a sixth student
+over capacity, host CPU saturation, and service restarts. Every one was
+detected by the intended alert once the fixes it found were applied; what each
+student saw and how each recovered is in
+[observability-incident-audit-2026-09-28.md](../releases/observability-incident-audit-2026-09-28.md).
+The host was a laptop at load 20–240, so every duration there is an upper
+bound, not a production measurement.
 
 ## 4. Collecting diagnostics safely
 

@@ -162,6 +162,12 @@ attempt, and there is none yet.
 └───────────────────────────┴──────────────────────────────────────────────────┘
 ```
 
+Under the header the workspace shows **Support ID** `sess-…` — "if something is
+wrong, give this to your instructor". An instructor or administrator pastes it
+into the classroom view to find this lab
+([instructor-guide.md](runbooks/instructor-guide.md)). It grants nothing: every
+request is still checked against who is asking.
+
 Below 960px the panes stack and the page scrolls. The workspace is designed for
 laptop and desktop screens; it works on a tablet, and on a phone it is usable
 but cramped.
@@ -175,8 +181,9 @@ simulates output.
 |---|---|---|
 | Connecting… | socket open, waiting for the shell | — |
 | Connected | shell ready | keystrokes go to the PTY |
-| The shell exited. | the student typed `exit` | **Reconnect** opens a new shell in the same environment |
+| The shell exited — your lab and files are still there. Press Reconnect for a new shell. | the student typed `exit` or pressed Ctrl+D | **Reconnect** opens a new shell in the same environment |
 | Disconnected after a period of inactivity. | the terminal service's idle timer | **Reconnect** |
+| Disconnected — more was pasted or typed at once than the terminal accepts. Reconnect to carry on. | close `INPUT_RATE_EXCEEDED`: the per-shell input budget | **Reconnect** |
 | Connection to the terminal was lost. Reconnecting… | abnormal close (e.g. network), or a terminal/broker restart | up to six automatic reconnects (1, 3, 6, 10, 15, 25 s — about a minute), then **Reconnect**. Before the first connection, a failed attempt shows *The terminal could not connect* with **Try again** at once, and the overlay stays (saying *Trying again automatically…*) through the automatic retries rather than flashing back to *Connecting…*. A reconnect that succeeds, or one the student asks for, cancels the pending automatic one |
 | The terminal’s access expired. | token refused | one new token is minted automatically |
 | Disconnected — this terminal was opened in another tab or window. | close 4410 while the session is still running: the terminal service keeps one shell per session, so opening the workspace elsewhere takes the terminal over | **Reconnect** takes it back |
@@ -268,7 +275,7 @@ Answers can arrive out of order, so three rules hold regardless:
 | `CREATING` | Preparing your lab environment… | none |
 | `ACTIVE` | the terminal | Verify, Reset, End lab |
 | `RESETTING` | Resetting your lab environment… | none |
-| `DEGRADED` | Your environment needs a reset | Reset, End lab |
+| `DEGRADED` | Your environment needs a reset (after a failed Reset, or when the reaper finds an ACTIVE lab's container stopped, #159) | Reset, End lab |
 | `EXPIRING` | Time is up — removing your environment… | none |
 | `ENDING` | Shutting down your lab environment… | none |
 | `ENDED` / `EXPIRED` / `FAILED` | summary, no terminal | Launch again, Back to labs |
@@ -320,12 +327,18 @@ Every error shows a title, what happened, what to do, and a small **Reference**
 | `PROVIDER_UNAVAILABLE` | This kind of lab is unavailable right now |
 | `SESSION_PROVISION_FAILED` | Your lab environment could not be prepared — try again |
 | `API_UNREACHABLE` | Cannot reach JumpToTech Labs — check your connection |
-| `AUTH_*` | Your sign-in has expired (the sign-in gate then takes over) |
+| `AUTH_UNAVAILABLE` | The platform is busy for a moment — you are still signed in |
+| other `AUTH_*` | Your sign-in has expired (the sign-in gate then takes over) |
+| `ACCESS_NOT_ACTIVE` | by the account's access state: *has not started yet* (SCHEDULED), *has ended* (EXPIRED), *is paused* (SUSPENDED), *no longer has lab access* (REVOKED), or *does not have lab access yet* (no grant). Progress is kept in every case. The dashboard shows the same notice with the reference `ACCESS_NOT_ACTIVE · <state>` before the student presses anything |
+| `LAB_NOT_IN_PLAN` | This lab is not included in your plan — labs in the plan's tracks still work |
+| `ACCESS_PLAN_UNAVAILABLE` | Your lab access could not be confirmed — progress is kept |
+| `LAB_LAUNCHES_PAUSED` | New labs are paused — labs already running keep working |
+| `CREDENTIALS_UNAVAILABLE` | The terminal could not attach to your environment — reconnect, or Reset / End |
 | `SESSION_NOT_FOUND` | This lab environment no longer exists |
 | `SESSION_NOT_ACTIVE` | Your environment is not ready for that |
-| `ENVIRONMENT_UNREACHABLE` | Verification could not run — not a mistake in your work |
+| `ENVIRONMENT_UNREACHABLE` | on Verify: Verification could not run — not a mistake in your work. On Reset: The reset could not reach your environment |
 | `SESSION_RESET_FAILED` | The reset did not finish — Reset again or End lab |
-| `DESTROY_FAILED` | Your lab is still shutting down — no need to press End again |
+| `DESTROY_FAILED` | Your lab is still shutting down — no need to press End again. The api sends this code for every End it could not finish, whatever the provider reported, so End is never answered with Verify or track-outage words |
 | `PROGRESS_UNAVAILABLE` | Progress is unavailable right now |
 | `RATE_LIMITED` | Too many requests — wait a minute |
 | `CHECK_IN_PROGRESS` | A check is already running — press Verify again in a few seconds |

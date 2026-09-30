@@ -204,6 +204,7 @@ cmd_run() {
     E2E_BASE_URL="http://127.0.0.1:${WEB_PORT}" \
     E2E_API_URL="http://127.0.0.1:${API_PORT}" \
     E2E_RUNTIME_OWNER_ID="${OWNER}" \
+    E2E_PROJECT="${PROJECT}" \
       npx playwright test --config e2e/playwright.config.ts "$@"
   ) || status=$?
   return "${status}"

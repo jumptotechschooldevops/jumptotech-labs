@@ -56,6 +56,27 @@ groups:
             including its own health endpoints.
           runbook_url: docs/runbooks/RB-11-api-errors-and-latency.md
 
+      # A leak of sockets, PTYs or docker streams, not a limit: the containers'
+      # `nofile` is 1,048,576 (measured), so "% of max" would first fire with the
+      # host itself in trouble. An absolute count instead. The 2026-09-28 drill
+      # measured about 30 open per service idle and a peak of 51 during a
+      # five-student class, roughly 10 per open shell; even 25 concurrent shells
+      # stay under 300. 1000 held for 15 minutes is a leak, not a class.
+      - alert: ProcessFileDescriptorsHigh
+        expr: jtt_process_open_fds{job=~"api|terminal|sandboxd"} > 1000
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: '{{ $labels.job }} holds {{ $value }} open file descriptors'
+          description: >-
+            Far above what the session cap can explain, so something is not
+            being closed: terminal sockets, broker shells, docker exec streams
+            or database connections. It grows until the process fails to accept
+            connections. Compare with jtt_terminal_connections_open and
+            jtt_sandboxd_shells_open before restarting anything.
+          runbook_url: docs/runbooks/RB-19-host-pressure.md
+
       - alert: VerificationErrorRate
         expr: jtt:verification_error:ratio10m > 0.05
         for: 10m

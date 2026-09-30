@@ -68,7 +68,7 @@ inhibit_rules:
 
   - source_matchers: [alertname="DatabaseDown"]
     target_matchers:
-      - alertname=~"ApiErrorRateHigh|LabStartsFailingHard|LabStartFailureRateElevated|AuthFailureSpike|DatabasePoolSaturated|VerificationErrorRate"
+      - alertname=~"ApiErrorRateHigh|ApiLatencyHigh|LabStartsFailingHard|LabStartFailureRateElevated|AuthFailureSpike|DatabasePoolSaturated|VerificationErrorRate"
 
   # The api's readiness includes the database, and sandboxd's is the container
   # runtime: the dependency's own alert names the fix. Readiness is measured at
@@ -82,9 +82,11 @@ inhibit_rules:
 
   # BETA-P0-018. The session store, the reaper's listing and sign-in all live in
   # the database; every one of these is DatabaseDown seen from another angle.
+  # ReaperStalled and ApiLatencyHigh since the 2026-09-28 drill, where both
+  # paged next to DatabaseDown while PostgreSQL was stopped.
   - source_matchers: [alertname="DatabaseDown"]
     target_matchers:
-      - alertname=~"ReaperSweepErrorsPersisting|LabResetsFailing|SessionStuckProvisioning|SessionResetStuck|SessionTeardownStuck|SessionDegradedNotReclaimed|AuthRejectionsAbnormal|OidcSignInFailures"
+      - alertname=~"ReaperSweepErrorsPersisting|ReaperStalled|LabResetsFailing|SessionStuckProvisioning|SessionResetStuck|SessionTeardownStuck|SessionDegradedNotReclaimed|AuthRejectionsAbnormal|OidcSignInFailures"
 
   # Stuck teardowns and unrecovered resets are what a stopped reaper looks like.
   - source_matchers: [alertname="ReaperStalled"]
@@ -118,9 +120,14 @@ inhibit_rules:
 
   # BETA-P0-018. Resets rebuild sandboxes, and container teardowns go through
   # the broker, so a missing runtime explains both.
+  #
+  # ReaperStalled too: the sweep lists every provider's sandboxes through the
+  # broker, so a hung broker stalls the whole sweep (2026-09-28 drill: sandboxd
+  # paused, ServiceDown{sandboxd} at +3 min and ReaperStalled at +4 min, both
+  # critical, one cause). It resumes on its own once the broker answers.
   - source_matchers: [alertname=~"SandboxdRuntimeDown|ServiceDown", job=~"sandboxd|"]
     target_matchers:
-      - alertname=~"LabResetsFailing|SessionStuckProvisioning|SessionTeardownStuck|ReaperSweepErrorsPersisting"
+      - alertname=~"LabResetsFailing|SessionStuckProvisioning|SessionTeardownStuck|ReaperSweepErrorsPersisting|ReaperStalled"
 
   # A missing or expired attestation is why the Kubernetes provider reports
   # unavailable; the attestation alert is the one that names the fix.
@@ -134,6 +141,13 @@ inhibit_rules:
   - source_matchers: [alertname="TlsCertificateExpiresWithin7Days"]
     target_matchers: [alertname=~"TlsEdgeUnhealthy|TlsCertificateRenewalDue"]
     equal: ['instance']
+  # The same failed starts cross both thresholds: measured in the 2026-09-28
+  # drill, three provision failures paged LabStartsFailingHard and, two minutes
+  # later, LabStartFailureRateElevated. Different names, so the critical-beats-
+  # warning rule below does not match them. No `equal`: neither carries a
+  # service or instance label (they are platform-wide sums).
+  - source_matchers: [alertname="LabStartsFailingHard"]
+    target_matchers: [alertname="LabStartFailureRateElevated"]
   - source_matchers: [alertname="HostMemoryCritical"]
     target_matchers: [alertname="HostMemoryPressure"]
     equal: ['instance']
