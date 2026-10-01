@@ -22,7 +22,7 @@
 # nothing back, so it holds an empty capability bounding set.
 #
 # Build:  npm run sandbox:build
-FROM alpine:3.21
+FROM alpine:3.24
 
 RUN apk add --no-cache \
       nodejs \

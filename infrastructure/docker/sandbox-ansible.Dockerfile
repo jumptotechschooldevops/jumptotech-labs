@@ -26,7 +26,7 @@
 # node's sshd cannot start without.
 #
 # Build:  npm run sandbox:build
-FROM alpine:3.21
+FROM alpine:3.24
 
 # ansible-core rather than the full `ansible` bundle: the labs teach builtin
 # modules and Jinja2, which core provides, and core keeps the image small

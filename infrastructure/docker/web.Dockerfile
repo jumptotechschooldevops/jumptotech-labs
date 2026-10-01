@@ -42,7 +42,7 @@ RUN npm run build --workspace @jumptotech/web
 # 2025-04-16, so the public TLS edge carried an nginx and an Alpine userland
 # (musl, zlib, …) with no security update since. The stable tag is rebuilt as
 # upstream and Alpine ship fixes; a rebuild of this image picks them up.
-FROM nginx:1.30-alpine AS edge
+FROM nginx:1.31-alpine AS edge
 
 # openssl is the only tool the certificate gate needs (BETA-P0-017). The runtime
 # directory holds the one file the gate writes; /var/www/acme is where the
