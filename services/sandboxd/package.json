@@ -22,13 +22,13 @@
   "dependencies": {
     "@jumptotech/lab-orchestrator": "*",
     "node-pty": "^1.0.0",
-    "tsx": "^4.19.2",
-    "ws": "^8.18.0",
+    "tsx": "^4.23.15",
+    "ws": "^8.22.0",
     "@jumptotech/observability": "*"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
-    "@types/ws": "^8.5.13",
+    "@types/ws": "^8.18.2",
     "typescript": "^5.7.2",
     "vitest": "^3.2.6",
     "@jumptotech/test-support": "*"
